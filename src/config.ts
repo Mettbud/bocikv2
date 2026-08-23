@@ -99,6 +99,28 @@ const envSchema = z.object({
   TRAILING_STOP_ENABLED: boolFlag(true),
   TRAILING_STOP_ARM_PERCENT: numeric(4),
   TRAILING_STOP_PERCENT: numeric(2),
+  // The "peak" is whatever price a single PRICE_POLL_INTERVAL_MS tick
+  // happened to see - a brief spike/wick sets it just as much as a real
+  // move. When > 0, the pullback condition above must hold continuously
+  // for this many ms (i.e. across consecutive ticks) before the sell
+  // actually fires, filtering out one-tick noise. 0 = fire immediately,
+  // same as before this setting existed.
+  TRAILING_STOP_CONFIRMATION_MS: numeric(4000),
+  // Opt-in, OFF by default - Slot A's normal rule is "never buy above
+  // lastSellPrice". If a token just keeps running up without ever dipping
+  // back to it, Slot A stays in cash and misses the whole move. When
+  // enabled, Slot A ALSO buys on a confirmed pullback within a breakout
+  // above lastSellPrice: pullback = (typical recent move) *
+  // BREAKOUT_BUY_MULTIPLIER, clamped to [MIN, MAX], and - same as the
+  // trailing stop - must hold for BREAKOUT_BUY_CONFIRMATION_MS before it
+  // actually fires. This is a real strategy change (buying into strength,
+  // not only dips) - keep it off on your primary config and try it on a
+  // side-by-side comparison run first (see README).
+  BREAKOUT_BUY_ENABLED: boolFlag(false),
+  BREAKOUT_BUY_MULTIPLIER: numeric(0.5),
+  BREAKOUT_BUY_MIN_PERCENT: numeric(2),
+  BREAKOUT_BUY_MAX_PERCENT: numeric(10),
+  BREAKOUT_BUY_CONFIRMATION_MS: numeric(4000),
 
   MAX_SLIPPAGE_BPS: numeric(150),
   MAX_PRICE_IMPACT_BPS: numeric(250),
@@ -171,6 +193,12 @@ function buildConfig(env: z.infer<typeof envSchema>) {
       trailingStopEnabled: env.TRAILING_STOP_ENABLED,
       trailingStopArmPercent: env.TRAILING_STOP_ARM_PERCENT,
       trailingStopPercent: env.TRAILING_STOP_PERCENT,
+      trailingStopConfirmationMs: env.TRAILING_STOP_CONFIRMATION_MS,
+      breakoutBuyEnabled: env.BREAKOUT_BUY_ENABLED,
+      breakoutBuyMultiplier: env.BREAKOUT_BUY_MULTIPLIER,
+      breakoutBuyMinPercent: env.BREAKOUT_BUY_MIN_PERCENT,
+      breakoutBuyMaxPercent: env.BREAKOUT_BUY_MAX_PERCENT,
+      breakoutBuyConfirmationMs: env.BREAKOUT_BUY_CONFIRMATION_MS,
     },
     execution: {
       maxSlippageBps: env.MAX_SLIPPAGE_BPS,

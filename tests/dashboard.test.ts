@@ -18,6 +18,7 @@ const flatSlotA: SlotDashboardState = {
   maxRoundTripCostPercent: 4,
   minNetProfitPercent: 2,
   reinforcement: undefined,
+  breakoutBuy: undefined,
 };
 
 const flatSlotB: SlotDashboardState = {
@@ -81,6 +82,7 @@ describe("formatDashboard", () => {
           sellTargetUsd: 0.0265,
           targetGainPercent: 6,
           stopLossPriceUsd: 0.01875,
+          stopLossPercent: 25,
           trailingStop: undefined,
         },
       },
@@ -107,6 +109,7 @@ describe("formatDashboard", () => {
           sellTargetUsd: 0.0265,
           targetGainPercent: 6,
           stopLossPriceUsd: 0.01875,
+          stopLossPercent: 25,
           trailingStop: undefined,
         },
       },
@@ -175,6 +178,7 @@ describe("formatDashboard", () => {
           sellTargetUsd: 0.0265,
           targetGainPercent: 6,
           stopLossPriceUsd: 0.01875,
+          stopLossPercent: 25,
           trailingStop: { peakPriceUsd: 0.0263, armed: true, triggerPriceUsd: 0.02577 },
         },
       },
@@ -199,6 +203,7 @@ describe("formatDashboard", () => {
           sellTargetUsd: 0.0265,
           targetGainPercent: 6,
           stopLossPriceUsd: 0.01875,
+          stopLossPercent: 25,
           trailingStop: { peakPriceUsd: 0.0252, armed: false, triggerPriceUsd: 0.024696 },
         },
       },
@@ -237,5 +242,51 @@ describe("formatDashboard", () => {
     expect(out).toContain("[Slot B]");
     expect(out).toContain("+3.74%");
     expect(out).toContain("$11.20");
+  });
+
+  it("shows the stop loss percentage alongside the price", () => {
+    const out = formatDashboard({
+      ...base,
+      slotA: {
+        ...flatSlotA,
+        position: {
+          tokenAmount: 1000,
+          buyPriceUsd: 0.025,
+          positionValueUsd: 26.5,
+          unrealizedPercent: 6,
+          unrealizedUsd: 1.5,
+          netIfSoldNowPercent: 3.2,
+          netIfSoldNowUsd: 1.6,
+          sellTargetUsd: 0.0265,
+          targetGainPercent: 6,
+          stopLossPriceUsd: 0.01875,
+          stopLossPercent: 25,
+          trailingStop: undefined,
+        },
+      },
+    });
+    expect(out).toContain("-25.00% od wejścia");
+  });
+
+  it("shows breakout-buy tracking once price has broken above the last sell", () => {
+    const out = formatDashboard({
+      ...base,
+      slotA: {
+        ...flatSlotA,
+        rebuyTriggerUsd: 0.02,
+        lastSellPriceUsd: 0.02,
+        breakoutBuy: { peakUsd: 0.023, pullbackPercent: 3, triggerPriceUsd: 0.02231 },
+      },
+    });
+    expect(out).toContain("Wybicie: szczyt");
+    expect(out).toContain("$0.02231000");
+  });
+
+  it("shows breakout-buy as inactive until price actually breaks out", () => {
+    const out = formatDashboard({
+      ...base,
+      slotA: { ...flatSlotA, breakoutBuy: { peakUsd: undefined, pullbackPercent: 3, triggerPriceUsd: undefined } },
+    });
+    expect(out).toContain("śledzenie nieaktywne");
   });
 });

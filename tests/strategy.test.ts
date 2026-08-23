@@ -4,6 +4,7 @@ import {
   afterSell,
   grossMovePercent,
   initialFlipState,
+  isBreakoutBuySignal,
   isBuySignal,
   isReinforcementBuySignal,
   isSellSignal,
@@ -11,6 +12,7 @@ import {
   isTrailingStopTriggered,
   rebuyTriggerPrice,
   sellTargetPrice,
+  updateBreakoutPeak,
   updatePeakPrice,
 } from "../src/strategy.js";
 
@@ -173,5 +175,50 @@ describe("trailing stop", () => {
 
   it("does nothing while flat", () => {
     expect(isTrailingStopTriggered(initialFlipState(), 1.0, 4, 2)).toBe(false);
+  });
+});
+
+describe("breakout buy (opt-in)", () => {
+  // Slot A sold at 1.10 and never came back down.
+  const afterASale = afterSell(
+    afterBuy(initialFlipState(), 1.0, 100, { buyLegPercent: 0.3, buyNetworkFeeLamports: 10_000, costUsd: 30 }, 6),
+    1.1,
+  );
+
+  it("does not track a peak while price is at or below lastSellPrice", () => {
+    const state = updateBreakoutPeak(afterASale, 1.05);
+    expect(state.breakoutPeakUsd).toBeNull();
+  });
+
+  it("tracks the peak once price breaks above lastSellPrice", () => {
+    let state = updateBreakoutPeak(afterASale, 1.15);
+    expect(state.breakoutPeakUsd).toBe(1.15);
+    state = updateBreakoutPeak(state, 1.12); // a dip doesn't lower the recorded peak
+    expect(state.breakoutPeakUsd).toBe(1.15);
+    state = updateBreakoutPeak(state, 1.2); // a new high does
+    expect(state.breakoutPeakUsd).toBe(1.2);
+  });
+
+  it("resets breakout tracking if price falls back to/below lastSellPrice", () => {
+    let state = updateBreakoutPeak(afterASale, 1.15);
+    expect(state.breakoutPeakUsd).toBe(1.15);
+    state = updateBreakoutPeak(state, 1.1); // back at lastSellPrice - ordinary dip-buy path takes over
+    expect(state.breakoutPeakUsd).toBeNull();
+  });
+
+  it("does not signal without a real breakout peak above lastSellPrice", () => {
+    expect(isBreakoutBuySignal(afterASale, 1.05, 3)).toBe(false); // no peak tracked yet
+  });
+
+  it("signals once price falls pullbackPercent below the breakout peak", () => {
+    const state = updateBreakoutPeak(afterASale, 1.15);
+    expect(isBreakoutBuySignal(state, 1.14, 3)).toBe(false); // -0.87%, not enough
+    expect(isBreakoutBuySignal(state, 1.115, 3)).toBe(true); // -3.04%, past the pullback
+  });
+
+  it("does nothing while holding a position", () => {
+    const held = afterBuy(afterASale, 1.15, 50, { buyLegPercent: 0.3, buyNetworkFeeLamports: 10_000, costUsd: 30 }, 6);
+    expect(updateBreakoutPeak(held, 1.2)).toBe(held);
+    expect(isBreakoutBuySignal(held, 1.1, 3)).toBe(false);
   });
 });

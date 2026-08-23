@@ -87,7 +87,16 @@ wyjść:
     ostatniej sprzedaży (`REBUY_DROP_PERCENT` dodaje dodatkowy margines).
     Jeśli cena po sprzedaży tylko rośnie i nigdy nie wraca do tego poziomu -
     bot świadomie nie kupuje, dopóki nie wróci; to jest cena bezpieczeństwa
-    "nigdy nie kupuj drożej niż ostatnio sprzedałeś", nie błąd.
+    "nigdy nie kupuj drożej niż ostatnio sprzedałeś", nie błąd. Opcjonalny
+    wyjątek: `BREAKOUT_BUY_ENABLED=true` (domyślnie **wyłączone**) dodaje
+    drugi, niezależny sposób na kupno - śledzi szczyt ruchu w górę powyżej
+    ostatniej sprzedaży i kupuje na potwierdzonym cofnięciu od niego
+    (`BREAKOUT_BUY_MULTIPLIER` × typowy ruch, z limitami MIN/MAX, plus
+    `BREAKOUT_BUY_CONFIRMATION_MS` - identyczny mechanizm co trailing stop,
+    tylko dla kupna zamiast sprzedaży). To realna zmiana strategii
+    (kupowanie w siłę rynku, nie tylko w dołki) - patrz sekcja "Porównanie
+    dwóch konfiguracji" niżej, żeby przetestować to bezpiecznie obok
+    głównej konfiguracji, zamiast włączać od razu na produkcji.
 - Zanim bot faktycznie kupi, sprawdza **żywy koszt rundy** - jeśli jest za
   wysoki (`MAX_ROUND_TRIP_COST_PERCENT`), pomija ten tick i czeka dalej.
 - **AWAITING_SELL** - czekamy, aż cena osiągnie `buyPrice * (1 + cel%)`
@@ -165,6 +174,16 @@ następnym ticku, zamiast wymuszać sprzedaż na stracie.
 Dashboard pokazuje status: `Trailing stop: UZBROJONY, szczyt $X, sprzeda
 poniżej $Y` albo `nieuzbrojony (szczyt $X, jeszcze za mało zysku)`. Wyłącz
 `TRAILING_STOP_ENABLED=false`, żeby wrócić do czekania wyłącznie na pełny cel.
+
+**Uwaga na "szczyt":** to cena z jednego, pojedynczego ticku (co
+`PRICE_POLL_INTERVAL_MS`, domyślnie 5s) - chwilowy spike/knot ustawia
+szczyt tak samo jak prawdziwy ruch. Żeby pojedynczy szum nie wywoływał
+przedwczesnej sprzedaży, `TRAILING_STOP_CONFIRMATION_MS` (domyślnie 4000)
+wymaga, żeby cofnięcie od szczytu utrzymało się **nieprzerwanie** przez
+tyle milisekund (kilka ticków z rzędu), zanim bot faktycznie sprzeda -
+dokładnie ten sam mechanizm co `STOP_CONFIRMATION_MS` w oryginalnym
+`botrade`. Ustaw na `0`, żeby sprzedawać natychmiast przy pierwszym ticku
+spełniającym warunek.
 
 ## Dwa sloty: Slot A + Slot B jako "dobicie"
 
@@ -316,6 +335,44 @@ wiarygodnym oszacowaniem tego, co dałaby prawdziwa transakcja - bez ryzykowania
    i obserwuj `data/bot.log` oraz `data/trades.csv` przez kilka pełnych
    cykli, zanim zwiększysz stawkę. Rozważ też start z `DUAL_SLOT_ENABLED=false`,
    żeby najpierw zobaczyć jak radzi sobie sam Slot A.
+
+### Porównanie dwóch konfiguracji obok siebie (A/B)
+
+Żeby przetestować dwa różne ustawienia równolegle (np. `.env` = wersja
+bezpieczna, `.env.b` z `BREAKOUT_BUY_ENABLED=true` żeby zobaczyć czy
+kupowanie na wybiciach faktycznie się opłaca) - **nie trzeba kopiować
+całego kodu**. Ten sam bot, dwa pliki `.env`, dwa terminale:
+
+```bash
+cp .env .env.b
+```
+
+W `.env.b` zmień to, co chcesz porównać, oraz koniecznie te trzy ścieżki
+(żeby obie instancje nie nadpisywały sobie danych):
+
+```
+STATE_FILE=./data/state-b.json
+TRADES_CSV=./data/trades-b.csv
+LOG_FILE=./data/bot-b.log
+```
+
+Odpal obie (dwa terminale/dwa okna):
+
+```bash
+npm run bot                                    # wersja A, .env
+DOTENV_CONFIG_PATH=.env.b npm run bot          # wersja B, .env.b (Linux/Mac)
+```
+
+Na Windows (PowerShell) ustaw zmienną osobno:
+
+```powershell
+$env:DOTENV_CONFIG_PATH=".env.b"; npm run bot
+```
+
+Po kilku godzinach porównaj `data/trades.csv` i `data/trades-b.csv` -
+liczba flipów, zrealizowany PnL, ile razy trailing stop faktycznie
+zadziałał vs. ile razy był to fałszywy alarm odfiltrowany przez
+potwierdzenie.
 
 ## Świadome uproszczenia względem `botrade`
 

@@ -26,6 +26,7 @@ export interface PositionSnapshot {
   /** The gain % actually used for this position's target - frozen at buy time. */
   targetGainPercent: number;
   stopLossPriceUsd: number | undefined;
+  stopLossPercent: number | undefined;
   /** Undefined when TRAILING_STOP_ENABLED=false. */
   trailingStop: TrailingStopInfo | undefined;
 }
@@ -58,6 +59,14 @@ export interface SlotDashboardState {
   minNetProfitPercent: number;
   /** Slot B only - undefined for Slot A. */
   reinforcement: ReinforcementInfo | undefined;
+  /** Slot A only, and only while BREAKOUT_BUY_ENABLED - undefined otherwise. */
+  breakoutBuy: BreakoutBuyInfo | undefined;
+}
+
+export interface BreakoutBuyInfo {
+  peakUsd: number | undefined;
+  pullbackPercent: number;
+  triggerPriceUsd: number | undefined;
 }
 
 export interface RecentTrade {
@@ -165,7 +174,7 @@ function formatSlot(slot: SlotDashboardState, tokenSymbol: string): string[] {
         : `${colorize(pct(p.netIfSoldNowPercent), signColor(p.netIfSoldNowPercent))} (${colorize(usd(p.netIfSoldNowUsd, 2), signColor(p.netIfSoldNowUsd))}) ${p.netIfSoldNowPercent >= slot.minNetProfitPercent ? colorize("(sprzedałby)", colors.GREEN) : colorize("(za mało netto)", colors.DIM)}`;
     lines.push(`  Netto teraz:   ${netLabel}`);
     if (p.stopLossPriceUsd !== undefined) {
-      lines.push(`  Stop loss:     ${usd(p.stopLossPriceUsd, 8)}`);
+      lines.push(`  Stop loss:     ${usd(p.stopLossPriceUsd, 8)} (-${(p.stopLossPercent ?? 0).toFixed(2)}% od wejścia)`);
     }
     if (p.trailingStop) {
       const t = p.trailingStop;
@@ -193,6 +202,17 @@ function formatSlot(slot: SlotDashboardState, tokenSymbol: string): string[] {
       lines.push(`  Odkup poniżej: ${usd(slot.rebuyTriggerUsd, 8)} (ostatnia sprzedaż ${usd(slot.lastSellPriceUsd, 8)})`);
     } else {
       lines.push("  Pierwsze wejście - kupi przy najbliższym ticku.");
+    }
+    if (slot.breakoutBuy) {
+      const b = slot.breakoutBuy;
+      if (b.peakUsd === undefined) {
+        lines.push(`  ${colorize("Wybicie:", colors.DIM)} śledzenie nieaktywne (cena nie przebiła ostatniej sprzedaży)`);
+      } else {
+        lines.push(
+          `  Wybicie: szczyt ${usd(b.peakUsd, 8)}, kupi przy cofnięciu poniżej ` +
+            `${usd(b.triggerPriceUsd, 8)} (-${b.pullbackPercent.toFixed(2)}%)`,
+        );
+      }
     }
   }
 

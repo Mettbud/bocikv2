@@ -10,12 +10,14 @@ import {
   afterBuy,
   afterSell,
   grossMovePercent,
+  isBreakoutBuySignal,
   isBuySignal,
   isReinforcementBuySignal,
   isSellSignal,
   isStopLossTriggered,
   isTrailingStopTriggered,
   sellTargetPrice,
+  updateBreakoutPeak,
   updatePeakPrice,
   type FlipState,
 } from "./strategy.js";
@@ -103,6 +105,13 @@ async function main() {
   // static/conservative defaults until enough of it has been rebuilt).
   let priceHistory: PriceSample[] = [];
   let recentTrades: RecentTrade[] = [];
+  // When did the trailing-stop pullback condition start holding true,
+  // continuously, for each slot? Reset to null the moment it stops holding
+  // (even for one tick) or the position closes - TRAILING_STOP_CONFIRMATION_MS
+  // requires it to survive multiple consecutive ticks before actually firing.
+  const trailingStopPendingSinceMs: Record<SlotKey, number | null> = { A: null, B: null };
+  // Same confirmation pattern, for the opt-in breakout buy - Slot A only.
+  let breakoutBuyPendingSinceMs: number | null = null;
 
   const setEvent = (message: string) => {
     lastEvent = { message, atMs: Date.now() };
@@ -205,18 +214,27 @@ async function main() {
   }
 
   async function evaluateSlotA(currentPriceUsd: number, solUsd: number): Promise<void> {
-    const flip = s.slotA;
-    if (flip.phase === "AWAITING_SELL" && flip.buyPrice !== null) {
+    if (s.slotA.phase === "AWAITING_SELL" && s.slotA.buyPrice !== null) {
       await evaluatePosition("A", currentPriceUsd, solUsd);
       return;
     }
+    if (s.slotA.phase !== "AWAITING_BUY") return;
+
     // The spread gate itself lives in executeBuy (it applies to manual buys
     // too) - this just decides whether it's worth checking this tick at all.
-    if (
-      flip.phase === "AWAITING_BUY" &&
-      isBuySignal(flip, currentPriceUsd, config.strategy.rebuyDropPercent, config.strategy.slotARequireManualFirstBuy)
-    ) {
+    if (isBuySignal(s.slotA, currentPriceUsd, config.strategy.rebuyDropPercent, config.strategy.slotARequireManualFirstBuy)) {
       await executeBuy("A", undefined, { requireCostGate: true, tag: "AUTO" });
+      return;
+    }
+
+    // Opt-in: buy into a confirmed pullback within a breakout above
+    // lastSellPrice, instead of only ever waiting for price to fall all
+    // the way back to it (which may never happen on a strong run-up).
+    if (config.strategy.breakoutBuyEnabled) {
+      setFlip("A", updateBreakoutPeak(s.slotA, currentPriceUsd));
+      if (checkBreakoutBuyWithConfirmation(s.slotA, currentPriceUsd)) {
+        await executeBuy("A", undefined, { requireCostGate: true, tag: "AUTO" });
+      }
     }
   }
 
@@ -293,9 +311,7 @@ async function main() {
     // A ranging market may never reach the full target - locks in gains on a
     // confirmed pullback from a real peak instead of waiting forever. Still
     // has to clear MIN_NET_PROFIT_PERCENT below, same as a normal target hit.
-    const trailingStopHit =
-      config.strategy.trailingStopEnabled &&
-      isTrailingStopTriggered(flip, currentPriceUsd, config.strategy.trailingStopArmPercent, config.strategy.trailingStopPercent);
+    const trailingStopHit = checkTrailingStopWithConfirmation(slotKey, flip, currentPriceUsd);
 
     if (!targetHit && !trailingStopHit) return;
 
@@ -313,6 +329,41 @@ async function main() {
     }
 
     await fillSell(slotKey, sell, tokenAmount, solUsd, gross, cost.totalPercent, net, targetHit ? "AUTO" : "TRAILING_STOP");
+  }
+
+  /**
+   * The raw pullback-from-peak condition can flip true on a single noisy
+   * tick (the peak itself is just whatever one tick happened to see) and
+   * flip false again just as fast. When TRAILING_STOP_CONFIRMATION_MS > 0,
+   * this requires the condition to hold continuously across ticks for that
+   * long before actually reporting it as triggered.
+   */
+  function checkTrailingStopWithConfirmation(slotKey: SlotKey, flip: FlipState, currentPriceUsd: number): boolean {
+    const rawHit =
+      config.strategy.trailingStopEnabled &&
+      isTrailingStopTriggered(flip, currentPriceUsd, config.strategy.trailingStopArmPercent, config.strategy.trailingStopPercent);
+
+    if (!rawHit) {
+      trailingStopPendingSinceMs[slotKey] = null;
+      return false;
+    }
+
+    const confirmationMs = config.strategy.trailingStopConfirmationMs;
+    if (confirmationMs <= 0) return true;
+
+    const pendingSince = trailingStopPendingSinceMs[slotKey] ?? Date.now();
+    trailingStopPendingSinceMs[slotKey] = pendingSince;
+    const heldForMs = Date.now() - pendingSince;
+    if (heldForMs < confirmationMs) {
+      if (config.log.logSkips) {
+        log.info(`Slot ${slotKey}: trailing stop pullback detected, confirming...`, {
+          heldForMs,
+          confirmationMs,
+        });
+      }
+      return false;
+    }
+    return true;
   }
 
   async function refreshBalances(): Promise<void> {
@@ -411,6 +462,41 @@ async function main() {
       config.strategy.dualTriggerMinPercent,
       config.strategy.dualTriggerMaxPercent,
     );
+  }
+
+  /** How far Slot A must pull back from a breakout peak before buying into it, right now. */
+  function computeCurrentBreakoutPullbackPercent(): number {
+    const stat = windowStats(priceHistory, config.strategy.volatilityLookbackMs);
+    if (stat.count === 0) return config.strategy.breakoutBuyMaxPercent;
+    return computeAdaptiveTargetPercent(
+      stat.medianAbsPercent,
+      config.strategy.breakoutBuyMultiplier,
+      config.strategy.breakoutBuyMinPercent,
+      config.strategy.breakoutBuyMaxPercent,
+    );
+  }
+
+  /** Same noise-filtering shape as checkTrailingStopWithConfirmation, for the breakout buy. */
+  function checkBreakoutBuyWithConfirmation(flip: FlipState, currentPriceUsd: number): boolean {
+    const rawHit = isBreakoutBuySignal(flip, currentPriceUsd, computeCurrentBreakoutPullbackPercent());
+    if (!rawHit) {
+      breakoutBuyPendingSinceMs = null;
+      return false;
+    }
+
+    const confirmationMs = config.strategy.breakoutBuyConfirmationMs;
+    if (confirmationMs <= 0) return true;
+
+    const pendingSince = breakoutBuyPendingSinceMs ?? Date.now();
+    breakoutBuyPendingSinceMs = pendingSince;
+    const heldForMs = Date.now() - pendingSince;
+    if (heldForMs < confirmationMs) {
+      if (config.log.logSkips) {
+        log.info("Slot A: breakout pullback detected, confirming...", { heldForMs, confirmationMs });
+      }
+      return false;
+    }
+    return true;
   }
 
   // --- buy/sell execution, shared by the automatic loop and manual commands
@@ -524,6 +610,7 @@ async function main() {
         targetGainPercent,
       ),
     );
+    if (slotKey === "A") breakoutBuyPendingSinceMs = null;
     saveState(config, s);
 
     const msg = `BUY [Slot ${slotKey}] ${fill.outputAmountUi.toFixed(4)} ${config.token.symbol} @ ${fillPriceUsd.toFixed(8)} (~$${usdAmount.toFixed(2)})`;
@@ -642,6 +729,7 @@ async function main() {
     const closingPosition = percentOfPosition >= 100;
     if (closingPosition) {
       setFlip(slotKey, afterSell(flip, fillPriceUsd));
+      trailingStopPendingSinceMs[slotKey] = null;
     } else {
       setFlip(slotKey, { ...flip, tokenAmount: (flip.tokenAmount ?? tokenAmount) - tokenAmount });
     }
@@ -714,6 +802,9 @@ async function main() {
         live.A = freshSlotLive();
         live.B = freshSlotLive();
         recentTrades = [];
+        trailingStopPendingSinceMs.A = null;
+        trailingStopPendingSinceMs.B = null;
+        breakoutBuyPendingSinceMs = null;
         saveState(config, s);
         const msg = `PAPER session reset (oba sloty) - fresh balance $${config.paper.startingBalanceUsd.toFixed(2)}`;
         setEvent(msg);
@@ -731,6 +822,7 @@ async function main() {
       entryCost: null,
       targetGainPercent: null,
       peakPriceUsd: null,
+      breakoutPeakUsd: null,
     };
   }
 
@@ -758,6 +850,7 @@ async function main() {
             targetGainPercent: activeTargetGainPercent,
             stopLossPriceUsd:
               config.strategy.stopLossPercent > 0 ? flip.buyPrice * (1 - config.strategy.stopLossPercent / 100) : undefined,
+            stopLossPercent: config.strategy.stopLossPercent > 0 ? config.strategy.stopLossPercent : undefined,
             trailingStop: config.strategy.trailingStopEnabled
               ? {
                   peakPriceUsd: flip.peakPriceUsd ?? flip.buyPrice,
@@ -785,6 +878,18 @@ async function main() {
           }
         : undefined;
 
+    const breakoutBuy =
+      slotKey === "A" && config.strategy.breakoutBuyEnabled
+        ? {
+            peakUsd: flip.breakoutPeakUsd ?? undefined,
+            pullbackPercent: computeCurrentBreakoutPullbackPercent(),
+            triggerPriceUsd:
+              flip.breakoutPeakUsd !== null
+                ? flip.breakoutPeakUsd * (1 - computeCurrentBreakoutPullbackPercent() / 100)
+                : undefined,
+          }
+        : undefined;
+
     return {
       label: slotKey,
       sizePercent: sizePercentFor(slotKey),
@@ -806,6 +911,7 @@ async function main() {
       maxRoundTripCostPercent: config.strategy.maxRoundTripCostPercent,
       minNetProfitPercent: config.strategy.minNetProfitPercent,
       reinforcement,
+      breakoutBuy,
     };
   }
 

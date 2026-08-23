@@ -46,6 +46,13 @@ export interface FlipState {
   targetGainPercent: number | null;
   /** Highest price seen since entry, set while AWAITING_SELL - drives the trailing stop. */
   peakPriceUsd: number | null;
+  /**
+   * Highest price seen while AWAITING_BUY and above lastSellPrice - drives
+   * the (opt-in) breakout buy. Only tracked once price has actually broken
+   * above the normal rebuy reference; resets whenever price drops back to
+   * or below lastSellPrice (the normal dip-buy path takes over instead).
+   */
+  breakoutPeakUsd: number | null;
   completedFlips: number;
 }
 
@@ -58,6 +65,7 @@ export function initialFlipState(): FlipState {
     entryCost: null,
     targetGainPercent: null,
     peakPriceUsd: null,
+    breakoutPeakUsd: null,
     completedFlips: 0,
   };
 }
@@ -179,6 +187,44 @@ export function isTrailingStopTriggered(
   return dropFromPeakPercent <= -trailPercent;
 }
 
+/**
+ * Opt-in (BREAKOUT_BUY_ENABLED, default off): while flat, if price runs up
+ * well above the normal rebuy reference instead of ever dipping back to it,
+ * the bot would otherwise wait forever. This tracks the peak of that
+ * run-up so a pullback-from-breakout buy (see `isBreakoutBuySignal`) has
+ * something to compare against - same shape as the trailing stop, just for
+ * buying instead of selling. A no-op whenever price is at or below
+ * lastSellPrice (the ordinary dip-buy path covers that case already).
+ */
+export function updateBreakoutPeak(state: FlipState, currentPrice: number): FlipState {
+  if (state.phase !== "AWAITING_BUY" || state.lastSellPrice === null) return state;
+  if (currentPrice <= state.lastSellPrice) {
+    return state.breakoutPeakUsd === null ? state : { ...state, breakoutPeakUsd: null };
+  }
+  const peak = Math.max(state.breakoutPeakUsd ?? currentPrice, currentPrice);
+  if (peak === state.breakoutPeakUsd) return state;
+  return { ...state, breakoutPeakUsd: peak };
+}
+
+/**
+ * Buys into a confirmed pullback within an up-move, instead of only ever
+ * buying back at (or below) the old lastSellPrice. Requires a real
+ * breakout peak above lastSellPrice to exist first (set by
+ * `updateBreakoutPeak`), then triggers once price falls `pullbackPercent`
+ * below that peak - same "don't guess the top, react to a real pullback"
+ * shape as the trailing stop.
+ */
+export function isBreakoutBuySignal(
+  state: FlipState,
+  currentPrice: number,
+  pullbackPercent: number,
+): boolean {
+  if (state.phase !== "AWAITING_BUY" || state.lastSellPrice === null || state.breakoutPeakUsd === null) return false;
+  if (state.breakoutPeakUsd <= state.lastSellPrice) return false;
+  const dropFromPeakPercent = grossMovePercent(state.breakoutPeakUsd, currentPrice);
+  return dropFromPeakPercent <= -pullbackPercent;
+}
+
 export function afterBuy(
   state: FlipState,
   fillPrice: number,
@@ -194,6 +240,7 @@ export function afterBuy(
     entryCost,
     targetGainPercent,
     peakPriceUsd: fillPrice,
+    breakoutPeakUsd: null,
   };
 }
 
@@ -206,6 +253,7 @@ export function afterSell(state: FlipState, fillPrice: number): FlipState {
     entryCost: null,
     targetGainPercent: null,
     peakPriceUsd: null,
+    breakoutPeakUsd: null,
     lastSellPrice: fillPrice,
     completedFlips: state.completedFlips + 1,
   };
