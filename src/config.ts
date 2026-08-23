@@ -60,6 +60,7 @@ const envSchema = z.object({
 
   PRICE_POLL_INTERVAL_MS: numeric(5000),
   PRICE_REFERENCE_SOL_AMOUNT: numeric(0.01),
+  DASHBOARD_REFRESH_MS: numeric(1000),
 
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
   LOG_FILE: z.string().default("./data/bot.log"),
@@ -107,6 +108,7 @@ function buildConfig(env: z.infer<typeof envSchema>) {
     },
     pricePollIntervalMs: env.PRICE_POLL_INTERVAL_MS,
     priceReferenceSolAmount: env.PRICE_REFERENCE_SOL_AMOUNT,
+    dashboardRefreshMs: env.DASHBOARD_REFRESH_MS,
     log: { level: env.LOG_LEVEL, file: env.LOG_FILE, logSkips: env.DRY_RUN_LOG_SKIPS },
     files: { state: env.STATE_FILE, tradesCsv: env.TRADES_CSV },
   };

@@ -1,6 +1,6 @@
 import "dotenv/config";
 import { PublicKey } from "@solana/web3.js";
-import { loadConfig } from "./config.js";
+import { loadConfig, type BotConfig } from "./config.js";
 import { createLogger } from "./logger.js";
 import { loadWalletKeypair } from "./wallet.js";
 import { JupiterClient, priceImpactPercent } from "./jupiter.js";
@@ -23,6 +23,8 @@ import {
 } from "./strategy.js";
 import { appendTrade, loadState, saveState, type PersistedState } from "./ledger.js";
 import { executeLeg, priceLeg } from "./trader.js";
+import { renderDashboard, type DashboardState } from "./cli/dashboard.js";
+import { startCommandLoop } from "./cli/commands.js";
 
 async function main() {
   const config = loadConfig();
@@ -32,16 +34,31 @@ async function main() {
   const solPrice = new SolPriceTracker(client, config);
 
   const keypair = config.mode === "live" ? loadWalletKeypair(config) : undefined;
-  const owner = keypair ? keypair.publicKey : new PublicKey(config.token.solMint); // unused placeholder in paper mode
+  const owner = keypair?.publicKey;
   const userPublicKeyStr = keypair ? keypair.publicKey.toBase58() : PublicKey.default.toBase58();
 
   const tokenMint = new PublicKey(config.token.mint);
-  const solMint = new PublicKey(config.token.solMint);
-  const tokenDecimals = await getMintDecimals(connection, tokenMint);
   const solDecimals = 9;
+  const tokenDecimals = await getMintDecimals(connection, tokenMint);
 
   const initialSolUsd = await solPrice.getPrice();
-  const state = loadState(config, config.paper.startingBalanceUsd / initialSolUsd);
+  let s: PersistedState = loadState(config, config.paper.startingBalanceUsd / initialSolUsd);
+
+  // --- live display state, rebuilt every tick / trade ---------------------
+  let latestPriceUsd: number | undefined;
+  let latestBuyImpactPercent: number | undefined;
+  let latestSellImpactPercent: number | undefined;
+  let latestRoundTripCostPercent: number | undefined;
+  let latestNetIfSoldNowPercent: number | undefined;
+  let lastEvent: { message: string; atMs: number } | undefined;
+  let lastErrorMessage: string | undefined;
+  let latestSolBalance = 0;
+  let latestTokenBalance = 0;
+  let latestSolUsd: number | undefined;
+
+  const setEvent = (message: string) => {
+    lastEvent = { message, atMs: Date.now() };
+  };
 
   log.info("bocik flip-bot starting", {
     mode: config.mode,
@@ -52,57 +69,146 @@ async function main() {
   });
 
   let running = true;
-  process.on("SIGINT", () => {
-    log.info("shutting down (SIGINT)");
+  const stop = () => {
+    if (!running) return;
     running = false;
-  });
-  process.on("SIGTERM", () => {
-    log.info("shutting down (SIGTERM)");
-    running = false;
+    log.info("shutting down");
+  };
+  process.on("SIGINT", stop);
+  process.on("SIGTERM", stop);
+
+  startCommandLoop({
+    logger: log,
+    mode: config.mode,
+    manualBuy: (usdAmount) => executeBuy(usdAmount, { requireCostGate: false, tag: "MANUAL" }),
+    manualSell: (percent) => executeSell(percent, { requireProfitGate: false, tag: "MANUAL" }),
+    panic: () => executeSell(100, { requireProfitGate: false, tag: "PANIC" }),
+    reset: resetPaperSession,
+    onExit: stop,
   });
 
-  while (running) {
-    try {
-      await tick(state);
-    } catch (err) {
-      log.error("tick failed", { error: String(err) });
+  const tickLoop = (async () => {
+    while (running) {
+      try {
+        await tick();
+      } catch (err) {
+        lastErrorMessage = String((err as Error).message ?? err);
+        log.error("tick failed", { error: lastErrorMessage });
+      }
+      await sleep(config.pricePollIntervalMs);
     }
-    await sleep(config.pricePollIntervalMs);
-  }
+  })();
 
-  saveState(config, state);
+  const dashboardLoop = (async () => {
+    while (running) {
+      renderDashboard(buildSnapshot());
+      await sleep(config.dashboardRefreshMs);
+    }
+  })();
+
+  await Promise.race([tickLoop, dashboardLoop]);
+  saveState(config, s);
   log.info("stopped, state saved");
+  process.exit(0);
 
-  // --- tick logic -----------------------------------------------------
+  // --- tick: the automatic strategy loop -----------------------------
 
-  async function tick(s: PersistedState): Promise<void> {
+  async function tick(): Promise<void> {
     const solUsd = await solPrice.getPrice();
     const currentPriceUsd = await getReferenceTokenPriceUsd(solUsd);
+    latestPriceUsd = currentPriceUsd;
+    latestSolUsd = solUsd;
+    await refreshBalances();
 
-    if (s.flip.phase === "AWAITING_BUY") {
-      if (!isBuySignal(s.flip, currentPriceUsd, config.strategy.rebuyDropPercent)) return;
-      await tryBuy(s, currentPriceUsd, solUsd);
+    if (s.flip.phase === "AWAITING_SELL" && s.flip.buyPrice !== null) {
+      await evaluatePosition(currentPriceUsd, solUsd);
       return;
     }
 
-    // AWAITING_SELL
-    if (s.flip.buyPrice === null) return;
-    const stopLoss = isStopLossTriggered(
-      s.flip.buyPrice,
-      currentPriceUsd,
-      config.strategy.stopLossPercent,
+    if (s.flip.phase === "AWAITING_BUY" && isBuySignal(s.flip, currentPriceUsd, config.strategy.rebuyDropPercent)) {
+      await executeBuy(config.trade.usd, { requireCostGate: true, tag: "AUTO" });
+    }
+  }
+
+  /** Live-quotes the sell leg every tick while in position - drives both the
+   *  dashboard's live PnL and the actual sell decision, off the same quote. */
+  async function evaluatePosition(currentPriceUsd: number, solUsd: number): Promise<void> {
+    const flip = s.flip;
+    if (flip.buyPrice === null || flip.entryCost === null) return;
+
+    const tokenAmount =
+      config.mode === "live" && owner
+        ? await getTokenBalanceUi(connection, owner, tokenMint)
+        : (flip.tokenAmount ?? s.paperTokenBalance);
+    if (tokenAmount <= 0) {
+      log.warn("in AWAITING_SELL but no token balance - resetting to AWAITING_BUY");
+      s.flip = afterSell(s.flip, currentPriceUsd);
+      saveState(config, s);
+      return;
+    }
+
+    const amountRaw = BigInt(Math.round(tokenAmount * 10 ** tokenDecimals));
+    const sell = await priceLeg(
+      client,
+      config,
+      { inputMint: config.token.mint, outputMint: config.token.solMint, amount: amountRaw.toString() },
+      userPublicKeyStr,
     );
+    const sellImpact = priceImpactPercent(sell.quote);
+    const cost = estimateRoundTripCostPercent({
+      buyPriceImpactPercent: flip.entryCost.buyLegPercent,
+      sellPriceImpactPercent: sellImpact,
+      networkFeeLamportsBothLegs: flip.entryCost.buyNetworkFeeLamports + sell.networkFeeLamports,
+      solPriceUsd: solUsd,
+      tradeSizeUsd: flip.entryCost.costUsd,
+    });
+    const gross = grossMovePercent(flip.buyPrice, currentPriceUsd);
+    const net = netProfitPercent(gross, cost.totalPercent);
+
+    latestSellImpactPercent = sellImpact;
+    latestRoundTripCostPercent = cost.totalPercent;
+    latestNetIfSoldNowPercent = net;
+
+    const stopLoss = isStopLossTriggered(flip.buyPrice, currentPriceUsd, config.strategy.stopLossPercent);
     if (stopLoss) {
       log.warn("stop loss triggered - exiting position regardless of target", {
-        buyPrice: s.flip.buyPrice,
+        buyPrice: flip.buyPrice,
         currentPriceUsd,
       });
-      await trySell(s, currentPriceUsd, solUsd, true);
+      await fillSell(sell, tokenAmount, solUsd, gross, cost.totalPercent, net, "STOP_LOSS");
       return;
     }
 
-    if (!isSellSignal(s.flip, currentPriceUsd, config.strategy.targetGainPercent)) return;
-    await trySell(s, currentPriceUsd, solUsd, false);
+    if (!isSellSignal(flip, currentPriceUsd, config.strategy.targetGainPercent)) return;
+
+    if (net < config.strategy.minNetProfitPercent) {
+      if (config.log.logSkips) {
+        log.info("target hit but net profit after costs is too thin - holding for a better fill", {
+          grossMovePercent: round2(gross),
+          estimatedRoundTripCostPercent: round2(cost.totalPercent),
+          netProfitPercent: round2(net),
+          required: config.strategy.minNetProfitPercent,
+        });
+      }
+      return;
+    }
+
+    await fillSell(sell, tokenAmount, solUsd, gross, cost.totalPercent, net, "AUTO");
+  }
+
+  async function refreshBalances(): Promise<void> {
+    if (config.mode === "paper") {
+      latestSolBalance = s.paperSolBalance;
+      latestTokenBalance = s.paperTokenBalance;
+      return;
+    }
+    if (!owner) return;
+    const [sol, token] = await Promise.all([
+      getSolBalanceSol(connection, owner),
+      getTokenBalanceUi(connection, owner, tokenMint),
+    ]);
+    latestSolBalance = sol;
+    latestTokenBalance = token;
   }
 
   async function getReferenceTokenPriceUsd(solUsd: number): Promise<number> {
@@ -118,22 +224,33 @@ async function main() {
     return solPerToken * solUsd;
   }
 
-  async function tryBuy(s: PersistedState, currentPriceUsd: number, solUsd: number) {
-    const tradeSizeUsd = config.trade.usd;
-    const solIn = tradeSizeUsd / solUsd;
+  // --- buy/sell execution, shared by the automatic loop and manual commands
+
+  async function executeBuy(
+    usdAmount: number,
+    opts: { requireCostGate: boolean; tag: "AUTO" | "MANUAL" },
+  ): Promise<void> {
+    if (s.flip.phase !== "AWAITING_BUY") {
+      if (opts.tag === "MANUAL") console.log("buy: already in a position - sell first.");
+      return;
+    }
+
+    const solUsd = await solPrice.getPrice();
+    const solIn = usdAmount / solUsd;
     const amountLamports = Math.round(solIn * 10 ** solDecimals);
 
-    if (config.mode === "live") {
+    if (config.mode === "live" && owner) {
       const solBalance = await getSolBalanceSol(connection, owner);
       if (solBalance - solIn < config.trade.minSolReserve) {
-        log.warn("skipping buy - would breach MIN_SOL_RESERVE", { solBalance, solIn });
+        const msg = `skipping buy - would breach MIN_SOL_RESERVE (balance ${solBalance.toFixed(4)}, need ${solIn.toFixed(4)})`;
+        log.warn(msg);
+        if (opts.tag === "MANUAL") console.log(msg);
         return;
       }
     } else if (s.paperSolBalance < solIn) {
-      log.warn("skipping buy - insufficient paper SOL balance", {
-        paperSolBalance: s.paperSolBalance,
-        solIn,
-      });
+      const msg = `skipping buy - insufficient paper SOL balance (${s.paperSolBalance.toFixed(4)} < ${solIn.toFixed(4)})`;
+      log.warn(msg);
+      if (opts.tag === "MANUAL") console.log(msg);
       return;
     }
 
@@ -144,52 +261,43 @@ async function main() {
       userPublicKeyStr,
     );
     const buyImpact = priceImpactPercent(buy.quote);
+    latestBuyImpactPercent = buyImpact;
     if (buyImpact > config.execution.maxPriceImpactBps / 100) {
-      log.warn("skipping buy - price impact too high", { buyImpactPercent: buyImpact });
+      const msg = `skipping buy - price impact too high (${buyImpact.toFixed(2)}%)`;
+      log.warn(msg);
+      if (opts.tag === "MANUAL") console.log(msg);
       return;
     }
 
-    // Hypothetical reverse leg, priced live, to estimate what selling this
-    // exact position back would cost right now - the other half of the
-    // round trip we're about to commit capital to.
     const hypotheticalSell = await priceLeg(
       client,
       config,
-      {
-        inputMint: config.token.mint,
-        outputMint: config.token.solMint,
-        amount: buy.quote.outAmount,
-      },
+      { inputMint: config.token.mint, outputMint: config.token.solMint, amount: buy.quote.outAmount },
       userPublicKeyStr,
     );
     const sellImpact = priceImpactPercent(hypotheticalSell.quote);
+    latestSellImpactPercent = sellImpact;
 
     const cost = estimateRoundTripCostPercent({
       buyPriceImpactPercent: buyImpact,
       sellPriceImpactPercent: sellImpact,
       networkFeeLamportsBothLegs: buy.networkFeeLamports + hypotheticalSell.networkFeeLamports,
       solPriceUsd: solUsd,
-      tradeSizeUsd,
+      tradeSizeUsd: usdAmount,
     });
+    latestRoundTripCostPercent = cost.totalPercent;
 
-    if (cost.totalPercent > config.strategy.maxRoundTripCostPercent) {
+    if (opts.requireCostGate && cost.totalPercent > config.strategy.maxRoundTripCostPercent) {
       if (config.log.logSkips) {
         log.info("skipping buy - estimated round-trip cost too high right now", {
-          estimatedRoundTripCostPercent: Number(cost.totalPercent.toFixed(2)),
+          estimatedRoundTripCostPercent: round2(cost.totalPercent),
           maxAllowed: config.strategy.maxRoundTripCostPercent,
         });
       }
       return;
     }
 
-    const fill = await executeLeg(
-      connection,
-      config,
-      keypair,
-      buy.quote,
-      buy.swap,
-      tokenDecimals,
-    );
+    const fill = await executeLeg(connection, config, keypair, buy.quote, buy.swap, tokenDecimals);
 
     if (config.mode === "paper") {
       s.paperSolBalance -= solIn;
@@ -200,16 +308,16 @@ async function main() {
     s.flip = afterBuy(s.flip, fillPriceUsd, fill.outputAmountUi, {
       buyLegPercent: buyImpact,
       buyNetworkFeeLamports: buy.networkFeeLamports,
-      tradeSizeUsd,
+      costUsd: usdAmount,
     });
     saveState(config, s);
 
-    log.info("BUY filled", {
-      priceUsd: Number(fillPriceUsd.toFixed(8)),
-      tokenAmount: fill.outputAmountUi,
-      solSpent: solIn,
-      estimatedRoundTripCostPercent: Number(cost.totalPercent.toFixed(2)),
-      targetSellPrice: Number(sellTargetPrice(fillPriceUsd, config.strategy.targetGainPercent).toFixed(8)),
+    const msg = `BUY ${fill.outputAmountUi.toFixed(4)} ${config.token.symbol} @ ${fillPriceUsd.toFixed(8)} (~$${usdAmount.toFixed(2)})`;
+    setEvent(msg);
+    log.info(msg, {
+      estimatedRoundTripCostPercent: round2(cost.totalPercent),
+      targetSellPrice: round8(sellTargetPrice(fillPriceUsd, config.strategy.targetGainPercent)),
+      tag: opts.tag,
       tx: fill.txSignature,
     });
 
@@ -220,32 +328,37 @@ async function main() {
       price: fillPriceUsd,
       tokenAmount: fill.outputAmountUi,
       solAmount: solIn,
-      usdValue: tradeSizeUsd,
+      usdValue: usdAmount,
       roundTripCostPercent: cost.totalPercent,
       txSignature: fill.txSignature,
     });
   }
 
-  async function trySell(
-    s: PersistedState,
-    currentPriceUsd: number,
-    solUsd: number,
-    stopLossExit: boolean,
-  ) {
-    if (s.flip.buyPrice === null || s.flip.entryCost === null) return;
-
-    const tokenAmount =
-      config.mode === "live"
-        ? await getTokenBalanceUi(connection, owner, tokenMint)
-        : (s.flip.tokenAmount ?? s.paperTokenBalance);
-    if (tokenAmount <= 0) {
-      log.warn("sell signal but no token balance to sell - resetting to AWAITING_BUY");
-      s.flip = afterSell(s.flip, currentPriceUsd);
-      saveState(config, s);
+  /** percentOfPosition: 100 closes the position and resumes the flip cycle;
+   *  less than 100 trims it and stays in AWAITING_SELL. */
+  async function executeSell(
+    percentOfPosition: number,
+    opts: { requireProfitGate: boolean; tag: "MANUAL" | "PANIC" },
+  ): Promise<void> {
+    const flip = s.flip;
+    if (flip.phase !== "AWAITING_SELL" || flip.buyPrice === null || flip.entryCost === null) {
+      if (opts.tag === "MANUAL" || opts.tag === "PANIC") console.log("sell: no position to sell.");
       return;
     }
 
-    const amountRaw = BigInt(Math.round(tokenAmount * 10 ** tokenDecimals));
+    const solUsd = await solPrice.getPrice();
+    const currentPriceUsd = await getReferenceTokenPriceUsd(solUsd);
+    const heldAmount =
+      config.mode === "live" && owner
+        ? await getTokenBalanceUi(connection, owner, tokenMint)
+        : (flip.tokenAmount ?? s.paperTokenBalance);
+    const sellAmount = heldAmount * (percentOfPosition / 100);
+    if (sellAmount <= 0) {
+      if (opts.tag === "MANUAL" || opts.tag === "PANIC") console.log("sell: no position to sell.");
+      return;
+    }
+
+    const amountRaw = BigInt(Math.round(sellAmount * 10 ** tokenDecimals));
     const sell = await priceLeg(
       client,
       config,
@@ -253,57 +366,74 @@ async function main() {
       userPublicKeyStr,
     );
     const sellImpact = priceImpactPercent(sell.quote);
-
     const cost = estimateRoundTripCostPercent({
-      buyPriceImpactPercent: s.flip.entryCost.buyLegPercent,
+      buyPriceImpactPercent: flip.entryCost.buyLegPercent,
       sellPriceImpactPercent: sellImpact,
-      networkFeeLamportsBothLegs: s.flip.entryCost.buyNetworkFeeLamports + sell.networkFeeLamports,
+      networkFeeLamportsBothLegs: flip.entryCost.buyNetworkFeeLamports + sell.networkFeeLamports,
       solPriceUsd: solUsd,
-      tradeSizeUsd: s.flip.entryCost.tradeSizeUsd,
+      tradeSizeUsd: flip.entryCost.costUsd,
     });
-
-    const gross = grossMovePercent(s.flip.buyPrice, currentPriceUsd);
+    const gross = grossMovePercent(flip.buyPrice, currentPriceUsd);
     const net = netProfitPercent(gross, cost.totalPercent);
 
-    if (!stopLossExit && net < config.strategy.minNetProfitPercent) {
-      if (config.log.logSkips) {
-        log.info("target hit but net profit after costs is too thin - holding for a better fill", {
-          grossMovePercent: Number(gross.toFixed(2)),
-          estimatedRoundTripCostPercent: Number(cost.totalPercent.toFixed(2)),
-          netProfitPercent: Number(net.toFixed(2)),
-          required: config.strategy.minNetProfitPercent,
-        });
-      }
+    if (opts.requireProfitGate && net < config.strategy.minNetProfitPercent) {
+      const msg = `sell: net profit too thin right now (${net.toFixed(2)}% < required ${config.strategy.minNetProfitPercent}%)`;
+      console.log(msg);
       return;
     }
 
-    const fill = await executeLeg(
-      connection,
-      config,
-      keypair,
-      sell.quote,
-      sell.swap,
-      solDecimals,
-    );
+    await fillSell(sell, sellAmount, solUsd, gross, cost.totalPercent, net, opts.tag, percentOfPosition);
+  }
 
+  /** Shared fill path once a sell has been decided (by tick or a command). */
+  async function fillSell(
+    sell: Awaited<ReturnType<typeof priceLeg>>,
+    tokenAmount: number,
+    solUsd: number,
+    gross: number,
+    roundTripCostPercent: number,
+    net: number,
+    tag: "AUTO" | "MANUAL" | "PANIC" | "STOP_LOSS",
+    percentOfPosition = 100,
+  ): Promise<void> {
+    const flip = s.flip;
+    if (flip.buyPrice === null || flip.entryCost === null) return;
+
+    const fill = await executeLeg(connection, config, keypair, sell.quote, sell.swap, solDecimals);
     const solOut = fill.outputAmountUi;
+    const proceedsUsd = solOut * solUsd;
+    const costBasisUsd = flip.entryCost.costUsd * (percentOfPosition / 100);
+    const realizedThisTrade = proceedsUsd - costBasisUsd;
+
     if (config.mode === "paper") {
       s.paperTokenBalance -= tokenAmount;
       s.paperSolBalance += solOut;
     }
+    s.realizedPnlUsd += realizedThisTrade;
 
-    const fillPriceUsd = (solOut * solUsd) / tokenAmount;
-    s.flip = afterSell(s.flip, fillPriceUsd);
+    const fillPriceUsd = proceedsUsd / tokenAmount;
+    const closingPosition = percentOfPosition >= 100;
+    if (closingPosition) {
+      s.flip = afterSell(s.flip, fillPriceUsd);
+    } else {
+      s.flip = { ...s.flip, tokenAmount: (flip.tokenAmount ?? tokenAmount) - tokenAmount };
+    }
     saveState(config, s);
 
-    log.info(stopLossExit ? "SELL filled (stop loss)" : "SELL filled", {
-      priceUsd: Number(fillPriceUsd.toFixed(8)),
-      tokenAmount,
-      solReceived: solOut,
-      grossMovePercent: Number(gross.toFixed(2)),
-      estimatedRoundTripCostPercent: Number(cost.totalPercent.toFixed(2)),
-      netProfitPercent: Number(net.toFixed(2)),
+    latestSellImpactPercent = sell.quote ? priceImpactPercent(sell.quote) : latestSellImpactPercent;
+    latestRoundTripCostPercent = roundTripCostPercent;
+    latestNetIfSoldNowPercent = closingPosition ? undefined : net;
+
+    const label = tag === "STOP_LOSS" ? "SELL (stop loss)" : tag === "PANIC" ? "SELL (panic)" : "SELL";
+    const msg = `${label} ${tokenAmount.toFixed(4)} ${config.token.symbol} @ ${fillPriceUsd.toFixed(8)} (net ${net.toFixed(2)}%)`;
+    setEvent(msg);
+    log.info(msg, {
+      grossMovePercent: round2(gross),
+      estimatedRoundTripCostPercent: round2(roundTripCostPercent),
+      netProfitPercent: round2(net),
+      realizedThisTradeUsd: round2(realizedThisTrade),
       completedFlips: s.flip.completedFlips,
+      tag,
       tx: fill.txSignature,
     });
 
@@ -314,12 +444,95 @@ async function main() {
       price: fillPriceUsd,
       tokenAmount,
       solAmount: solOut,
-      usdValue: solOut * solUsd,
-      roundTripCostPercent: cost.totalPercent,
+      usdValue: proceedsUsd,
+      roundTripCostPercent,
       netProfitPercent: net,
       txSignature: fill.txSignature,
     });
   }
+
+  function resetPaperSession(): void {
+    solPrice
+      .getPrice()
+      .then((solUsd) => {
+        s = {
+          flip: { ...s.flip, phase: "AWAITING_BUY", buyPrice: null, tokenAmount: null, entryCost: null },
+          paperSolBalance: config.paper.startingBalanceUsd / solUsd,
+          paperTokenBalance: 0,
+          realizedPnlUsd: 0,
+        };
+        latestNetIfSoldNowPercent = undefined;
+        saveState(config, s);
+        const msg = `PAPER session reset - fresh balance $${config.paper.startingBalanceUsd.toFixed(2)}`;
+        setEvent(msg);
+        log.info(msg);
+      })
+      .catch((err) => log.error("reset failed", { error: String(err) }));
+  }
+
+  // --- dashboard ------------------------------------------------------
+
+  function buildSnapshot(): DashboardState {
+    const flip = s.flip;
+    const position =
+      flip.phase === "AWAITING_SELL" && flip.buyPrice !== null && flip.entryCost !== null
+        ? {
+            tokenAmount: flip.tokenAmount ?? 0,
+            buyPriceUsd: flip.buyPrice,
+            positionValueUsd:
+              latestPriceUsd !== undefined && flip.tokenAmount !== null
+                ? flip.tokenAmount * latestPriceUsd
+                : undefined,
+            unrealizedPercent:
+              latestPriceUsd !== undefined ? grossMovePercent(flip.buyPrice, latestPriceUsd) : undefined,
+            unrealizedUsd:
+              latestPriceUsd !== undefined && flip.tokenAmount !== null
+                ? flip.tokenAmount * (latestPriceUsd - flip.buyPrice)
+                : undefined,
+            netIfSoldNowPercent: latestNetIfSoldNowPercent,
+            sellTargetUsd: sellTargetPrice(flip.buyPrice, config.strategy.targetGainPercent),
+            stopLossPriceUsd:
+              config.strategy.stopLossPercent > 0
+                ? flip.buyPrice * (1 - config.strategy.stopLossPercent / 100)
+                : undefined,
+          }
+        : undefined;
+
+    return {
+      tokenSymbol: config.token.symbol,
+      mode: config.mode === "live" ? "LIVE" : "PAPER",
+      priceUsd: latestPriceUsd,
+      position,
+      rebuyTriggerUsd:
+        flip.phase === "AWAITING_BUY" && flip.lastSellPrice !== null
+          ? flip.lastSellPrice * (1 - config.strategy.rebuyDropPercent / 100)
+          : undefined,
+      lastSellPriceUsd: flip.lastSellPrice ?? undefined,
+      completedFlips: flip.completedFlips,
+      realizedPnlUsd: s.realizedPnlUsd,
+      solBalance: latestSolBalance,
+      tokenBalance: latestTokenBalance,
+      // Paper mode's total portfolio value (SOL + any open position), not just cash on hand.
+      paperUsdBalance:
+        config.mode === "paper" && latestSolUsd !== undefined
+          ? latestSolBalance * latestSolUsd + latestTokenBalance * (latestPriceUsd ?? 0)
+          : undefined,
+      buyImpactPercent: latestBuyImpactPercent,
+      sellImpactPercent: latestSellImpactPercent,
+      roundTripCostPercent: latestRoundTripCostPercent,
+      minNetProfitPercent: config.strategy.minNetProfitPercent,
+      maxRoundTripCostPercent: config.strategy.maxRoundTripCostPercent,
+      lastEvent: lastEvent ? { message: lastEvent.message, ageMs: Date.now() - lastEvent.atMs } : undefined,
+      lastErrorMessage,
+    };
+  }
+}
+
+function round2(n: number): number {
+  return Number(n.toFixed(2));
+}
+function round8(n: number): number {
+  return Number(n.toFixed(8));
 }
 
 function sleep(ms: number): Promise<void> {

@@ -16,8 +16,8 @@ export interface EntryCost {
   buyLegPercent: number;
   /** Priority + network fee lamports paid on the buy leg. */
   buyNetworkFeeLamports: number;
-  /** Position notional in USD at entry - the denominator for cost %s. */
-  tradeSizeUsd: number;
+  /** Actual USD spent on the buy - both the round-trip cost-% denominator and the realized-PnL basis. */
+  costUsd: number;
 }
 
 export interface FlipState {

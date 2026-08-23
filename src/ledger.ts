@@ -8,6 +8,8 @@ export interface PersistedState {
   /** Only meaningful in paper mode - live balances always come from chain. */
   paperSolBalance: number;
   paperTokenBalance: number;
+  /** Sum of (sell proceeds - buy cost) across every completed flip, in USD. */
+  realizedPnlUsd: number;
 }
 
 export function loadState(config: BotConfig, defaultSolBalance: number): PersistedState {
@@ -18,12 +20,14 @@ export function loadState(config: BotConfig, defaultSolBalance: number): Persist
       flip: raw.flip ?? initialFlipState(),
       paperSolBalance: raw.paperSolBalance ?? defaultSolBalance,
       paperTokenBalance: raw.paperTokenBalance ?? 0,
+      realizedPnlUsd: raw.realizedPnlUsd ?? 0,
     };
   }
   return {
     flip: initialFlipState(),
     paperSolBalance: defaultSolBalance,
     paperTokenBalance: 0,
+    realizedPnlUsd: 0,
   };
 }
 

@@ -21,7 +21,7 @@ describe("flip strategy state machine", () => {
     const state = afterBuy(initialFlipState(), 1.0, 100, {
       buyLegPercent: 0.3,
       buyNetworkFeeLamports: 10_000,
-      tradeSizeUsd: 50,
+      costUsd: 50,
     });
     expect(isBuySignal(state, 0.5, 0)).toBe(false);
   });
@@ -30,7 +30,7 @@ describe("flip strategy state machine", () => {
     let state = afterBuy(initialFlipState(), 1.0, 100, {
       buyLegPercent: 0.3,
       buyNetworkFeeLamports: 10_000,
-      tradeSizeUsd: 50,
+      costUsd: 50,
     });
     state = afterSell(state, 1.1);
     expect(state.lastSellPrice).toBe(1.1);
@@ -49,7 +49,7 @@ describe("flip strategy state machine", () => {
     const state = afterBuy(initialFlipState(), 1.0, 100, {
       buyLegPercent: 0.3,
       buyNetworkFeeLamports: 10_000,
-      tradeSizeUsd: 50,
+      costUsd: 50,
     });
     const target = sellTargetPrice(1.0, 6);
     expect(target).toBeCloseTo(1.06, 5);
@@ -74,7 +74,7 @@ describe("flip strategy state machine", () => {
     state = afterBuy(state, 1.0, 100, {
       buyLegPercent: 0.3,
       buyNetworkFeeLamports: 10_000,
-      tradeSizeUsd: 50,
+      costUsd: 50,
     });
     state = afterSell(state, 1.06);
     expect(state.completedFlips).toBe(1);

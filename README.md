@@ -78,6 +78,25 @@ wyjść:
   poszła mocno w dół i "sprzedaj wysoko" nigdy by nie nadeszło. Ustaw na 0,
   żeby wyłączyć.
 
+## Dashboard i komendy
+
+Zamiast przewijanych logów, `npm run bot` odświeża w terminalu jeden ekran
+stanu (co `DASHBOARD_REFRESH_MS`, domyślnie 1s): aktualną cenę, pozycję (jeśli
+otwarta) z live PnL i tym, ile zostałoby netto gdyby sprzedać teraz, cel
+sprzedaży, próg odkupu, zrealizowany PnL, salda i aktualny szacowany koszt
+rundy. Pełny log zdarzeń nadal leci do `data/bot.log`.
+
+W tym samym terminalu działają komendy (wpisz i Enter):
+
+```
+buy <usd>       - kup ręcznie za tyle USD (pomija sygnał strategii, ale nie limity bezpieczeństwa)
+sell [percent]  - sprzedaj tyle % pozycji (domyślnie 100%), pomija wymóg minimalnego zysku netto
+panic           - natychmiastowe wyjście z całej pozycji
+reset           - (tylko paper) zeruje saldo i pozycję do stanu startowego
+status          - wymusza odświeżenie (dashboard i tak odświeża się sam)
+quit / exit     - zamyka bota, zapisując stan
+```
+
 ## Struktura kodu
 
 ```
@@ -91,9 +110,13 @@ src/
                     live: podpisanie i wysłanie transakcji)
   ledger.ts      - trwały stan (data/state.json) + log transakcji (data/trades.csv)
   wallet.ts       - wczytanie klucza portfela (tylko tryb live)
-  index.ts        - pętla główna
+  cli/
+    format.ts     - kolory/formatowanie liczb w terminalu
+    dashboard.ts  - czyste renderowanie ekranu stanu (testowalne bez I/O)
+    commands.ts   - komendy z stdin: buy/sell/panic/reset/status/quit
+  index.ts        - pętla główna: strategia + dashboard + komendy
 tests/
-  strategy.test.ts, costModel.test.ts - testy jednostkowe logiki
+  strategy.test.ts, costModel.test.ts, dashboard.test.ts - testy jednostkowe
 ```
 
 ## Uruchomienie
