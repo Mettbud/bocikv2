@@ -44,6 +44,8 @@ export interface FlipState {
    * moving goalpost mid-trade. The next buy computes its own.
    */
   targetGainPercent: number | null;
+  /** Highest price seen since entry, set while AWAITING_SELL - drives the trailing stop. */
+  peakPriceUsd: number | null;
   completedFlips: number;
 }
 
@@ -55,6 +57,7 @@ export function initialFlipState(): FlipState {
     tokenAmount: null,
     entryCost: null,
     targetGainPercent: null,
+    peakPriceUsd: null,
     completedFlips: 0,
   };
 }
@@ -76,15 +79,21 @@ export function rebuyTriggerPrice(
  * Is it time to *look at* buying? This does not check cost/profitability -
  * that's a live decision made against a fresh quote, see costModel.ts. This
  * only answers "has price behaved the way our rule requires".
+ *
+ * `requireManualFirstEntry`: when true, the very first-ever entry (no prior
+ * sell yet) is never taken automatically - only a manual "buy" command can
+ * open it. Every rebuy after that first position closes is unaffected and
+ * still fires automatically off `lastSellPrice`, same as always.
  */
 export function isBuySignal(
   state: FlipState,
   currentPrice: number,
   rebuyDropPercent: number,
+  requireManualFirstEntry = false,
 ): boolean {
   if (state.phase !== "AWAITING_BUY") return false;
   // No prior sell yet: this is the very first entry into the strategy.
-  if (state.lastSellPrice === null) return true;
+  if (state.lastSellPrice === null) return !requireManualFirstEntry;
   return currentPrice <= rebuyTriggerPrice(state.lastSellPrice, rebuyDropPercent);
 }
 
@@ -129,6 +138,47 @@ export function isStopLossTriggered(
   return currentPrice <= buyPrice * (1 - stopLossPercent / 100);
 }
 
+/**
+ * Call every tick while a position is open, before checking anything else -
+ * keeps `peakPriceUsd` current so the trailing stop below has something
+ * real to compare against. A no-op once the price stops making new highs.
+ */
+export function updatePeakPrice(state: FlipState, currentPrice: number): FlipState {
+  if (state.phase !== "AWAITING_SELL" || state.buyPrice === null) return state;
+  const peak = Math.max(state.peakPriceUsd ?? state.buyPrice, currentPrice);
+  if (peak === state.peakPriceUsd) return state;
+  return { ...state, peakPriceUsd: peak };
+}
+
+/**
+ * Locks in gains on a position that got meaningfully into profit and then
+ * pulled back, instead of only ever exiting at the full original target
+ * (which a ranging/choppy market may never reach) or riding all the way
+ * back down. Two stages:
+ *   1. "Armed" only once the peak since entry reached at least `armPercent`
+ *      gain - a position that never got that far into profit doesn't have
+ *      real gains to protect yet.
+ *   2. Once armed, triggers as soon as price falls `trailPercent` below
+ *      that peak - selling with whatever gain is left then, not at the
+ *      peak itself (nothing here predicts the top).
+ *
+ * This only decides WHEN to consider exiting early - like a normal target
+ * hit, the actual sell still has to clear MIN_NET_PROFIT_PERCENT against a
+ * live quote before it fires (see index.ts).
+ */
+export function isTrailingStopTriggered(
+  state: FlipState,
+  currentPrice: number,
+  armPercent: number,
+  trailPercent: number,
+): boolean {
+  if (state.phase !== "AWAITING_SELL" || state.buyPrice === null || state.peakPriceUsd === null) return false;
+  const peakGainPercent = grossMovePercent(state.buyPrice, state.peakPriceUsd);
+  if (peakGainPercent < armPercent) return false;
+  const dropFromPeakPercent = grossMovePercent(state.peakPriceUsd, currentPrice);
+  return dropFromPeakPercent <= -trailPercent;
+}
+
 export function afterBuy(
   state: FlipState,
   fillPrice: number,
@@ -143,6 +193,7 @@ export function afterBuy(
     tokenAmount,
     entryCost,
     targetGainPercent,
+    peakPriceUsd: fillPrice,
   };
 }
 
@@ -154,6 +205,7 @@ export function afterSell(state: FlipState, fillPrice: number): FlipState {
     tokenAmount: null,
     entryCost: null,
     targetGainPercent: null,
+    peakPriceUsd: null,
     lastSellPrice: fillPrice,
     completedFlips: state.completedFlips + 1,
   };

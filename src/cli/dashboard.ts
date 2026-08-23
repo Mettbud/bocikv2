@@ -5,6 +5,14 @@ export interface DashboardEvent {
   ageMs: number;
 }
 
+export interface TrailingStopInfo {
+  peakPriceUsd: number;
+  /** True once the peak has reached TRAILING_STOP_ARM_PERCENT gain from entry. */
+  armed: boolean;
+  /** Price that would trigger a sell consideration - peak minus TRAILING_STOP_PERCENT. */
+  triggerPriceUsd: number | undefined;
+}
+
 export interface PositionSnapshot {
   tokenAmount: number;
   buyPriceUsd: number;
@@ -13,10 +21,13 @@ export interface PositionSnapshot {
   unrealizedUsd: number | undefined;
   /** What net profit % selling right now would clear, after live-estimated round-trip costs. */
   netIfSoldNowPercent: number | undefined;
+  netIfSoldNowUsd: number | undefined;
   sellTargetUsd: number;
   /** The gain % actually used for this position's target - frozen at buy time. */
   targetGainPercent: number;
   stopLossPriceUsd: number | undefined;
+  /** Undefined when TRAILING_STOP_ENABLED=false. */
+  trailingStop: TrailingStopInfo | undefined;
 }
 
 export interface ReinforcementInfo {
@@ -49,6 +60,18 @@ export interface SlotDashboardState {
   reinforcement: ReinforcementInfo | undefined;
 }
 
+export interface RecentTrade {
+  ageMs: number;
+  slot: "A" | "B";
+  side: "BUY" | "SELL";
+  tokenAmount: number;
+  priceUsd: number;
+  usdValue: number;
+  /** Undefined for BUY rows - only a SELL has a realized net result. */
+  netProfitPercent: number | undefined;
+  netProfitUsd: number | undefined;
+}
+
 export interface DashboardState {
   tokenSymbol: string;
   mode: "PAPER" | "LIVE";
@@ -66,6 +89,8 @@ export interface DashboardState {
   /** Baseline pool spread (size-independent) - last checked at the last buy attempt. */
   spreadPercent: number | undefined;
   maxSpreadPercent: number;
+  /** Newest first - a handful of the most recent fills, both slots combined. */
+  recentTrades: RecentTrade[];
   lastEvent: DashboardEvent | undefined;
   lastErrorMessage: string | undefined;
 }
@@ -96,6 +121,14 @@ export function formatDashboard(s: DashboardState): string {
 
   lines.push("");
   lines.push(`Spread puli: ${formatPct(s.spreadPercent)} (max ${s.maxSpreadPercent}%)`);
+
+  if (s.recentTrades.length > 0) {
+    lines.push("");
+    lines.push(`${colors.BOLD}Ostatnie transakcje${colors.RESET}`);
+    for (const t of s.recentTrades) {
+      lines.push(`  ${formatTradeLine(t, s.tokenSymbol)}`);
+    }
+  }
 
   if (s.lastEvent) {
     lines.push("");
@@ -129,10 +162,18 @@ function formatSlot(slot: SlotDashboardState, tokenSymbol: string): string[] {
     const netLabel =
       p.netIfSoldNowPercent === undefined
         ? "-"
-        : `${colorize(pct(p.netIfSoldNowPercent), signColor(p.netIfSoldNowPercent))} ${p.netIfSoldNowPercent >= slot.minNetProfitPercent ? colorize("(sprzedałby)", colors.GREEN) : colorize("(za mało netto)", colors.DIM)}`;
+        : `${colorize(pct(p.netIfSoldNowPercent), signColor(p.netIfSoldNowPercent))} (${colorize(usd(p.netIfSoldNowUsd, 2), signColor(p.netIfSoldNowUsd))}) ${p.netIfSoldNowPercent >= slot.minNetProfitPercent ? colorize("(sprzedałby)", colors.GREEN) : colorize("(za mało netto)", colors.DIM)}`;
     lines.push(`  Netto teraz:   ${netLabel}`);
     if (p.stopLossPriceUsd !== undefined) {
       lines.push(`  Stop loss:     ${usd(p.stopLossPriceUsd, 8)}`);
+    }
+    if (p.trailingStop) {
+      const t = p.trailingStop;
+      if (t.armed && t.triggerPriceUsd !== undefined) {
+        lines.push(`  Trailing stop: ${colorize("UZBROJONY", colors.GREEN)}, szczyt ${usd(t.peakPriceUsd, 8)}, sprzeda poniżej ${usd(t.triggerPriceUsd, 8)}`);
+      } else {
+        lines.push(`  Trailing stop: ${colorize("nieuzbrojony", colors.DIM)} (szczyt ${usd(t.peakPriceUsd, 8)}, jeszcze za mało zysku)`);
+      }
     }
   } else if (slot.reinforcement) {
     const r = slot.reinforcement;
@@ -174,6 +215,16 @@ function formatSlot(slot: SlotDashboardState, tokenSymbol: string): string[] {
   );
 
   return lines;
+}
+
+function formatTradeLine(t: RecentTrade, tokenSymbol: string): string {
+  const sideLabel = t.side === "BUY" ? colorize("KUPNO", colors.YELLOW) : colorize("SPRZEDAŻ", colors.GREEN);
+  const base = `[Slot ${t.slot}] ${sideLabel} ${t.tokenAmount.toLocaleString()} ${tokenSymbol} @ ${usd(t.priceUsd, 8)}`;
+  const detail =
+    t.netProfitPercent !== undefined && t.netProfitUsd !== undefined
+      ? ` (net ${colorize(pct(t.netProfitPercent), signColor(t.netProfitPercent))} / ${colorize(usd(t.netProfitUsd, 2), signColor(t.netProfitUsd))})`
+      : ` (~${usd(t.usdValue, 2)})`;
+  return `${base}${detail} (${formatAge(t.ageMs)})`;
 }
 
 function formatPct(value: number | undefined): string {

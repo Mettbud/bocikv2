@@ -8,8 +8,10 @@ import {
   isReinforcementBuySignal,
   isSellSignal,
   isStopLossTriggered,
+  isTrailingStopTriggered,
   rebuyTriggerPrice,
   sellTargetPrice,
+  updatePeakPrice,
 } from "../src/strategy.js";
 
 describe("flip strategy state machine", () => {
@@ -44,6 +46,17 @@ describe("flip strategy state machine", () => {
   it("rebuyDropPercent requires an extra cushion below the last sell", () => {
     const trigger = rebuyTriggerPrice(1.1, 5);
     expect(trigger).toBeCloseTo(1.045, 5);
+  });
+
+  it("requireManualFirstEntry suppresses only the very first auto-buy, not later rebuys", () => {
+    const fresh = initialFlipState();
+    expect(isBuySignal(fresh, 1.0, 0, true)).toBe(false); // first entry blocked
+    expect(isBuySignal(fresh, 1.0, 0, false)).toBe(true); // default behavior unaffected
+
+    let state = afterBuy(fresh, 1.0, 100, { buyLegPercent: 0.3, buyNetworkFeeLamports: 10_000, costUsd: 50 }, 6);
+    state = afterSell(state, 1.1);
+    // Once there's been a first sell, rebuys work normally even with the flag on.
+    expect(isBuySignal(state, 1.05, 0, true)).toBe(true);
   });
 
   it("sell signal fires only at or above the gross target", () => {
@@ -113,5 +126,52 @@ describe("Slot B reinforcement trigger", () => {
       costUsd: 30,
     }, 6);
     expect(isReinforcementBuySignal(openSlotA, openSlotB, 0.8, 8)).toBe(false);
+  });
+});
+
+describe("trailing stop", () => {
+  const entryPrice = 1.0;
+  const opened = afterBuy(
+    initialFlipState(),
+    entryPrice,
+    100,
+    { buyLegPercent: 0.3, buyNetworkFeeLamports: 10_000, costUsd: 50 },
+    6,
+  );
+
+  it("starts the peak at the entry price", () => {
+    expect(opened.peakPriceUsd).toBe(1.0);
+  });
+
+  it("updatePeakPrice only ever moves the peak up", () => {
+    let state = updatePeakPrice(opened, 1.05);
+    expect(state.peakPriceUsd).toBe(1.05);
+    state = updatePeakPrice(state, 1.02); // a dip doesn't lower the recorded peak
+    expect(state.peakPriceUsd).toBe(1.05);
+    state = updatePeakPrice(state, 1.08); // a new high does
+    expect(state.peakPriceUsd).toBe(1.08);
+  });
+
+  it("does not arm until the peak reaches armPercent gain from entry", () => {
+    const state = updatePeakPrice(opened, 1.02); // peak +2%, arm requires +4%
+    expect(isTrailingStopTriggered(state, 0.99, 4, 2)).toBe(false);
+  });
+
+  it("triggers once price falls trailPercent below an armed peak", () => {
+    // Peak reaches +5% (armed at 4%), then pulls back.
+    const state = updatePeakPrice(opened, 1.05);
+    expect(isTrailingStopTriggered(state, 1.04, 4, 2)).toBe(false); // -0.95% from peak, not enough
+    expect(isTrailingStopTriggered(state, 1.029, 4, 2)).toBe(true); // -2% from peak, triggers
+  });
+
+  it("a triggered exit can still be a real gain, just not the full target", () => {
+    const state = updatePeakPrice(opened, 1.05);
+    const exitPrice = 1.029;
+    expect(isTrailingStopTriggered(state, exitPrice, 4, 2)).toBe(true);
+    expect(grossMovePercent(entryPrice, exitPrice)).toBeGreaterThan(0); // still above entry
+  });
+
+  it("does nothing while flat", () => {
+    expect(isTrailingStopTriggered(initialFlipState(), 1.0, 4, 2)).toBe(false);
   });
 });

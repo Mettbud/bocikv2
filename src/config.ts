@@ -84,6 +84,21 @@ const envSchema = z.object({
   // Refuse to trade at all if the live-estimated round-trip cost is above
   // this - a blown-out spread/impact means "don't trade this tick".
   MAX_ROUND_TRIP_COST_PERCENT: numeric(4),
+  // When true, the very first-ever entry into Slot A (no prior sell yet) is
+  // never taken automatically - only a manual "buy" command opens it.
+  // Every rebuy after that first position closes still fires automatically
+  // off the recorded last-sell price, exactly as always.
+  SLOT_A_REQUIRE_MANUAL_FIRST_BUY: boolFlag(true),
+  // Locks in gains on a position that got meaningfully into profit and then
+  // pulled back, instead of only ever exiting at the full TARGET_GAIN_PERCENT
+  // (which a choppy/ranging market may never reach). Once a position's peak
+  // price since entry reaches TRAILING_STOP_ARM_PERCENT gain, the trailing
+  // stop "arms"; from then on, if price falls TRAILING_STOP_PERCENT below
+  // that peak, a sell is considered (still has to clear MIN_NET_PROFIT_PERCENT
+  // like any other sell - this only decides WHEN to look).
+  TRAILING_STOP_ENABLED: boolFlag(true),
+  TRAILING_STOP_ARM_PERCENT: numeric(4),
+  TRAILING_STOP_PERCENT: numeric(2),
 
   MAX_SLIPPAGE_BPS: numeric(150),
   MAX_PRICE_IMPACT_BPS: numeric(250),
@@ -152,6 +167,10 @@ function buildConfig(env: z.infer<typeof envSchema>) {
       dualTriggerMultiplier: env.DUAL_TRIGGER_MULTIPLIER,
       dualTriggerMinPercent: env.DUAL_TRIGGER_MIN_PERCENT,
       dualTriggerMaxPercent: env.DUAL_TRIGGER_MAX_PERCENT,
+      slotARequireManualFirstBuy: env.SLOT_A_REQUIRE_MANUAL_FIRST_BUY,
+      trailingStopEnabled: env.TRAILING_STOP_ENABLED,
+      trailingStopArmPercent: env.TRAILING_STOP_ARM_PERCENT,
+      trailingStopPercent: env.TRAILING_STOP_PERCENT,
     },
     execution: {
       maxSlippageBps: env.MAX_SLIPPAGE_BPS,

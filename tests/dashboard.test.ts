@@ -40,6 +40,7 @@ const base: DashboardState = {
   paperUsdBalance: 1000,
   spreadPercent: undefined,
   maxSpreadPercent: 1,
+  recentTrades: [],
   lastEvent: undefined,
   lastErrorMessage: undefined,
 };
@@ -76,9 +77,11 @@ describe("formatDashboard", () => {
           unrealizedPercent: 6,
           unrealizedUsd: 1.5,
           netIfSoldNowPercent: 3.2,
+          netIfSoldNowUsd: 1.6,
           sellTargetUsd: 0.0265,
           targetGainPercent: 6,
           stopLossPriceUsd: 0.01875,
+          trailingStop: undefined,
         },
       },
     });
@@ -100,9 +103,11 @@ describe("formatDashboard", () => {
           unrealizedPercent: -12,
           unrealizedUsd: -3,
           netIfSoldNowPercent: -14,
+          netIfSoldNowUsd: -7,
           sellTargetUsd: 0.0265,
           targetGainPercent: 6,
           stopLossPriceUsd: 0.01875,
+          trailingStop: undefined,
         },
       },
       slotB: { ...flatSlotB, reinforcement: { enabled: true, triggerDropPercent: 8, slotADrawdownPercent: -12 } },
@@ -152,5 +157,85 @@ describe("formatDashboard", () => {
     });
     expect(out).toContain("stały");
     expect(out).toContain("+6.00%");
+  });
+
+  it("shows an armed trailing stop with its trigger price", () => {
+    const out = formatDashboard({
+      ...base,
+      slotA: {
+        ...flatSlotA,
+        position: {
+          tokenAmount: 1000,
+          buyPriceUsd: 0.025,
+          positionValueUsd: 26.5,
+          unrealizedPercent: 5,
+          unrealizedUsd: 1.25,
+          netIfSoldNowPercent: 2.5,
+          netIfSoldNowUsd: 1.25,
+          sellTargetUsd: 0.0265,
+          targetGainPercent: 6,
+          stopLossPriceUsd: 0.01875,
+          trailingStop: { peakPriceUsd: 0.0263, armed: true, triggerPriceUsd: 0.02577 },
+        },
+      },
+    });
+    expect(out).toContain("UZBROJONY");
+    expect(out).toContain("$0.02577000");
+  });
+
+  it("shows an unarmed trailing stop", () => {
+    const out = formatDashboard({
+      ...base,
+      slotA: {
+        ...flatSlotA,
+        position: {
+          tokenAmount: 1000,
+          buyPriceUsd: 0.025,
+          positionValueUsd: 25.2,
+          unrealizedPercent: 0.8,
+          unrealizedUsd: 0.2,
+          netIfSoldNowPercent: -1.2,
+          netIfSoldNowUsd: -0.6,
+          sellTargetUsd: 0.0265,
+          targetGainPercent: 6,
+          stopLossPriceUsd: 0.01875,
+          trailingStop: { peakPriceUsd: 0.0252, armed: false, triggerPriceUsd: 0.024696 },
+        },
+      },
+    });
+    expect(out).toContain("nieuzbrojony");
+  });
+
+  it("lists recent trades, newest first", () => {
+    const out = formatDashboard({
+      ...base,
+      recentTrades: [
+        {
+          ageMs: 60_000,
+          slot: "A",
+          side: "BUY",
+          tokenAmount: 15104.6681,
+          priceUsd: 0.01986141,
+          usdValue: 300,
+          netProfitPercent: undefined,
+          netProfitUsd: undefined,
+        },
+        {
+          ageMs: 300_000,
+          slot: "B",
+          side: "SELL",
+          tokenAmount: 17530.5574,
+          priceUsd: 0.01778077,
+          usdValue: 311.7,
+          netProfitPercent: 3.74,
+          netProfitUsd: 11.2,
+        },
+      ],
+    });
+    expect(out).toContain("Ostatnie transakcje");
+    expect(out).toContain("[Slot A]");
+    expect(out).toContain("[Slot B]");
+    expect(out).toContain("+3.74%");
+    expect(out).toContain("$11.20");
   });
 });

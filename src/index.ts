@@ -14,7 +14,9 @@ import {
   isReinforcementBuySignal,
   isSellSignal,
   isStopLossTriggered,
+  isTrailingStopTriggered,
   sellTargetPrice,
+  updatePeakPrice,
   type FlipState,
 } from "./strategy.js";
 import { appendTrade, loadState, saveState, type PersistedState } from "./ledger.js";
@@ -30,6 +32,7 @@ interface SlotLive {
   sellImpactPercent: number | undefined;
   roundTripCostPercent: number | undefined;
   netIfSoldNowPercent: number | undefined;
+  netIfSoldNowUsd: number | undefined;
 }
 
 function freshSlotLive(): SlotLive {
@@ -38,7 +41,21 @@ function freshSlotLive(): SlotLive {
     sellImpactPercent: undefined,
     roundTripCostPercent: undefined,
     netIfSoldNowPercent: undefined,
+    netIfSoldNowUsd: undefined,
   };
+}
+
+/** Last few fills, newest first - just enough to show "what happened recently" without digging into trades.csv. */
+const MAX_RECENT_TRADES = 8;
+interface RecentTrade {
+  atMs: number;
+  slot: SlotKey;
+  side: "BUY" | "SELL";
+  tokenAmount: number;
+  priceUsd: number;
+  usdValue: number;
+  netProfitPercent: number | undefined;
+  netProfitUsd: number | undefined;
 }
 
 async function main() {
@@ -85,10 +102,15 @@ async function main() {
   // not persisted, so it starts empty on every restart (falls back to
   // static/conservative defaults until enough of it has been rebuilt).
   let priceHistory: PriceSample[] = [];
+  let recentTrades: RecentTrade[] = [];
 
   const setEvent = (message: string) => {
     lastEvent = { message, atMs: Date.now() };
   };
+
+  function recordTrade(trade: RecentTrade): void {
+    recentTrades = [trade, ...recentTrades].slice(0, MAX_RECENT_TRADES);
+  }
 
   // --- small per-slot helpers ------------------------------------------
 
@@ -190,7 +212,10 @@ async function main() {
     }
     // The spread gate itself lives in executeBuy (it applies to manual buys
     // too) - this just decides whether it's worth checking this tick at all.
-    if (flip.phase === "AWAITING_BUY" && isBuySignal(flip, currentPriceUsd, config.strategy.rebuyDropPercent)) {
+    if (
+      flip.phase === "AWAITING_BUY" &&
+      isBuySignal(flip, currentPriceUsd, config.strategy.rebuyDropPercent, config.strategy.slotARequireManualFirstBuy)
+    ) {
       await executeBuy("A", undefined, { requireCostGate: true, tag: "AUTO" });
     }
   }
@@ -213,6 +238,8 @@ async function main() {
   /** Live-quotes the sell leg every tick while in position - drives both the
    *  dashboard's live PnL and the actual sell decision, off the same quote. */
   async function evaluatePosition(slotKey: SlotKey, currentPriceUsd: number, solUsd: number): Promise<void> {
+    // Keep the recorded peak current before anything else checks it.
+    setFlip(slotKey, updatePeakPrice(getFlip(slotKey), currentPriceUsd));
     const flip = getFlip(slotKey);
     if (flip.buyPrice === null || flip.entryCost === null) return;
 
@@ -248,6 +275,7 @@ async function main() {
     live[slotKey].sellImpactPercent = sellImpact;
     live[slotKey].roundTripCostPercent = cost.totalPercent;
     live[slotKey].netIfSoldNowPercent = net;
+    live[slotKey].netIfSoldNowUsd = flip.entryCost.costUsd * (net / 100);
 
     const stopLoss = isStopLossTriggered(flip.buyPrice, currentPriceUsd, config.strategy.stopLossPercent);
     if (stopLoss) {
@@ -261,11 +289,20 @@ async function main() {
 
     // Frozen at buy time (adaptive or static) - never recomputed mid-trade.
     const targetGainPercent = flip.targetGainPercent ?? config.strategy.targetGainPercent;
-    if (!isSellSignal(flip, currentPriceUsd, targetGainPercent)) return;
+    const targetHit = isSellSignal(flip, currentPriceUsd, targetGainPercent);
+    // A ranging market may never reach the full target - locks in gains on a
+    // confirmed pullback from a real peak instead of waiting forever. Still
+    // has to clear MIN_NET_PROFIT_PERCENT below, same as a normal target hit.
+    const trailingStopHit =
+      config.strategy.trailingStopEnabled &&
+      isTrailingStopTriggered(flip, currentPriceUsd, config.strategy.trailingStopArmPercent, config.strategy.trailingStopPercent);
+
+    if (!targetHit && !trailingStopHit) return;
 
     if (net < config.strategy.minNetProfitPercent) {
       if (config.log.logSkips) {
-        log.info(`Slot ${slotKey}: target hit but net profit after costs is too thin - holding for a better fill`, {
+        log.info(`Slot ${slotKey}: sell considered but net profit after costs is too thin - holding for a better fill`, {
+          reason: targetHit ? "target hit" : "trailing stop pullback",
           grossMovePercent: round2(gross),
           estimatedRoundTripCostPercent: round2(cost.totalPercent),
           netProfitPercent: round2(net),
@@ -275,7 +312,7 @@ async function main() {
       return;
     }
 
-    await fillSell(slotKey, sell, tokenAmount, solUsd, gross, cost.totalPercent, net, "AUTO");
+    await fillSell(slotKey, sell, tokenAmount, solUsd, gross, cost.totalPercent, net, targetHit ? "AUTO" : "TRAILING_STOP");
   }
 
   async function refreshBalances(): Promise<void> {
@@ -500,6 +537,17 @@ async function main() {
       tx: fill.txSignature,
     });
 
+    recordTrade({
+      atMs: Date.now(),
+      slot: slotKey,
+      side: "BUY",
+      tokenAmount: fill.outputAmountUi,
+      priceUsd: fillPriceUsd,
+      usdValue: usdAmount,
+      netProfitPercent: undefined,
+      netProfitUsd: undefined,
+    });
+
     appendTrade(config, {
       timestampIso: new Date().toISOString(),
       mode: config.mode,
@@ -572,7 +620,7 @@ async function main() {
     gross: number,
     roundTripCostPercent: number,
     net: number,
-    tag: "AUTO" | "MANUAL" | "PANIC" | "STOP_LOSS",
+    tag: "AUTO" | "MANUAL" | "PANIC" | "STOP_LOSS" | "TRAILING_STOP",
     percentOfPosition = 100,
   ): Promise<void> {
     const flip = getFlip(slotKey);
@@ -602,9 +650,17 @@ async function main() {
     live[slotKey].sellImpactPercent = priceImpactPercent(sell.quote);
     live[slotKey].roundTripCostPercent = roundTripCostPercent;
     live[slotKey].netIfSoldNowPercent = closingPosition ? undefined : net;
+    live[slotKey].netIfSoldNowUsd = closingPosition ? undefined : realizedThisTrade;
 
-    const label = tag === "STOP_LOSS" ? "SELL (stop loss)" : tag === "PANIC" ? "SELL (panic)" : "SELL";
-    const msg = `${label} [Slot ${slotKey}] ${tokenAmount.toFixed(4)} ${config.token.symbol} @ ${fillPriceUsd.toFixed(8)} (net ${net.toFixed(2)}%)`;
+    const label =
+      tag === "STOP_LOSS"
+        ? "SELL (stop loss)"
+        : tag === "TRAILING_STOP"
+          ? "SELL (trailing stop)"
+          : tag === "PANIC"
+            ? "SELL (panic)"
+            : "SELL";
+    const msg = `${label} [Slot ${slotKey}] ${tokenAmount.toFixed(4)} ${config.token.symbol} @ ${fillPriceUsd.toFixed(8)} (net ${net.toFixed(2)}% / ${usdSigned(realizedThisTrade)})`;
     setEvent(msg);
     log.info(msg, {
       slot: slotKey,
@@ -615,6 +671,17 @@ async function main() {
       completedFlips: getFlip(slotKey).completedFlips,
       tag,
       tx: fill.txSignature,
+    });
+
+    recordTrade({
+      atMs: Date.now(),
+      slot: slotKey,
+      side: "SELL",
+      tokenAmount,
+      priceUsd: fillPriceUsd,
+      usdValue: proceedsUsd,
+      netProfitPercent: net,
+      netProfitUsd: realizedThisTrade,
     });
 
     appendTrade(config, {
@@ -646,6 +713,7 @@ async function main() {
         };
         live.A = freshSlotLive();
         live.B = freshSlotLive();
+        recentTrades = [];
         saveState(config, s);
         const msg = `PAPER session reset (oba sloty) - fresh balance $${config.paper.startingBalanceUsd.toFixed(2)}`;
         setEvent(msg);
@@ -662,6 +730,7 @@ async function main() {
       tokenAmount: null,
       entryCost: null,
       targetGainPercent: null,
+      peakPriceUsd: null,
     };
   }
 
@@ -684,10 +753,23 @@ async function main() {
                 ? flip.tokenAmount * (latestPriceUsd - flip.buyPrice)
                 : undefined,
             netIfSoldNowPercent: live[slotKey].netIfSoldNowPercent,
+            netIfSoldNowUsd: live[slotKey].netIfSoldNowUsd,
             sellTargetUsd: sellTargetPrice(flip.buyPrice, activeTargetGainPercent),
             targetGainPercent: activeTargetGainPercent,
             stopLossPriceUsd:
               config.strategy.stopLossPercent > 0 ? flip.buyPrice * (1 - config.strategy.stopLossPercent / 100) : undefined,
+            trailingStop: config.strategy.trailingStopEnabled
+              ? {
+                  peakPriceUsd: flip.peakPriceUsd ?? flip.buyPrice,
+                  armed:
+                    flip.peakPriceUsd !== null &&
+                    grossMovePercent(flip.buyPrice, flip.peakPriceUsd) >= config.strategy.trailingStopArmPercent,
+                  triggerPriceUsd:
+                    flip.peakPriceUsd !== null
+                      ? flip.peakPriceUsd * (1 - config.strategy.trailingStopPercent / 100)
+                      : undefined,
+                }
+              : undefined,
           }
         : undefined;
 
@@ -751,6 +833,16 @@ async function main() {
       paperUsdBalance: config.mode === "paper" ? equityUsd : undefined,
       spreadPercent: latestSpreadPercent,
       maxSpreadPercent: config.strategy.maxSpreadPercent,
+      recentTrades: recentTrades.map((t) => ({
+        ageMs: Date.now() - t.atMs,
+        slot: t.slot,
+        side: t.side,
+        tokenAmount: t.tokenAmount,
+        priceUsd: t.priceUsd,
+        usdValue: t.usdValue,
+        netProfitPercent: t.netProfitPercent,
+        netProfitUsd: t.netProfitUsd,
+      })),
       lastEvent: lastEvent ? { message: lastEvent.message, ageMs: Date.now() - lastEvent.atMs } : undefined,
       lastErrorMessage,
     };
@@ -759,6 +851,10 @@ async function main() {
 
 function round2(n: number): number {
   return Number(n.toFixed(2));
+}
+function usdSigned(n: number): string {
+  const sign = n >= 0 ? "+" : "-";
+  return `${sign}$${Math.abs(n).toFixed(2)}`;
 }
 function round8(n: number): number {
   return Number(n.toFixed(8));

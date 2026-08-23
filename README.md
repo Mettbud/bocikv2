@@ -78,9 +78,16 @@ Jeden stan na raz, bez uśredniania pozycji, bez kaskadowych częściowych
 wyjść:
 
 - **AWAITING_BUY** - czekamy na sygnał kupna:
-  - pierwszy cykl: kupujemy od razu (ustalamy punkt wejścia),
+  - pierwszy cykl: kupujemy od razu (ustalamy punkt wejścia) - chyba że
+    `SLOT_A_REQUIRE_MANUAL_FIRST_BUY=true` (domyślnie), wtedy to *pierwsze
+    w historii* wejście Slotu A czeka na ręczną komendę `buy` w konsoli;
+    każdy kolejny odkup po zamknięciu tej pozycji znowu jest w pełni
+    automatyczny, bez wyjątków,
   - kolejne cykle: kupujemy dopiero gdy cena spadnie do (lub poniżej) ceny
     ostatniej sprzedaży (`REBUY_DROP_PERCENT` dodaje dodatkowy margines).
+    Jeśli cena po sprzedaży tylko rośnie i nigdy nie wraca do tego poziomu -
+    bot świadomie nie kupuje, dopóki nie wróci; to jest cena bezpieczeństwa
+    "nigdy nie kupuj drożej niż ostatnio sprzedałeś", nie błąd.
 - Zanim bot faktycznie kupi, sprawdza **żywy koszt rundy** - jeśli jest za
   wysoki (`MAX_ROUND_TRIP_COST_PERCENT`), pomija ten tick i czeka dalej.
 - **AWAITING_SELL** - czekamy, aż cena osiągnie `buyPrice * (1 + cel%)`
@@ -125,6 +132,39 @@ Dashboard pokazuje na bieżąco, jaki cel obowiązuje otwartą pozycję
 jaki cel policzyłby następny zakup już teraz (`Next target: adaptive,
 aktualnie liczyłby +X%`). Wyłącz `ADAPTIVE_TARGET_ENABLED=false`, żeby
 wrócić do sztywnego `TARGET_GAIN_PERCENT`.
+
+### Trailing stop: zamek na zysk, gdy rynek się nie decyduje
+
+Na rynku bocznym (cena kręci się np. między -3% a +3%, nigdy nie dobija do
+celu 6-7%) pozycja może teoretycznie czekać w nieskończoność. Trailing stop
+to na to lekarstwo - zamiast czekać wyłącznie na pełny cel, sprzedaje
+wcześniej, gdy widzi że zysk, który już był, zaczyna znikać.
+
+Działanie w dwóch krokach (domyślnie `TRAILING_STOP_ARM_PERCENT=4`,
+`TRAILING_STOP_PERCENT=2`):
+
+1. **Uzbrojenie** - dopiero gdy najwyższa cena od zakupu osiągnie +4% zysku.
+   Pozycja, która nigdy nie doszła nawet do +4%, nie ma jeszcze realnego
+   zysku do obrony, więc nic się nie dzieje.
+2. **Wyzwolenie** - od tego momentu bot śledzi szczyt. Jeśli cena spadnie o
+   2% od tego szczytu, sprzedaje **z tym, co akurat jest** - nie na
+   szczycie (nie zgadujemy górki), tylko przy pierwszym potwierdzonym
+   cofnięciu.
+
+Przykład liczbowy: kupno przy $1.00, cel 6% ($1.06). Cena rośnie do $1.05
+(+5%, szczyt) - trailing stop się uzbraja (bo +5% > próg 4%). Cena spada do
+$1.029 (2% poniżej szczytu $1.05) - **sprzedaż teraz**, z zyskiem ok. +2.9%
+zamiast czekać (może bez końca) na pełne +6%.
+
+Sprzedaje się **cała pozycja na raz** (100%, tak jak przy zwykłym trafieniu
+celu) - i tak samo jak normalne trafienie celu, ta sprzedaż nadal musi
+przejść przez `MIN_NET_PROFIT_PERCENT` liczone na żywo. Jeśli akurat po
+kosztach netto by nie wyszło - bot czeka i sprawdza ponownie przy
+następnym ticku, zamiast wymuszać sprzedaż na stracie.
+
+Dashboard pokazuje status: `Trailing stop: UZBROJONY, szczyt $X, sprzeda
+poniżej $Y` albo `nieuzbrojony (szczyt $X, jeszcze za mało zysku)`. Wyłącz
+`TRAILING_STOP_ENABLED=false`, żeby wrócić do czekania wyłącznie na pełny cel.
 
 ## Dwa sloty: Slot A + Slot B jako "dobicie"
 
@@ -195,10 +235,14 @@ walk), ale dużo lepszy punkt startowy niż zgadywanie.
 
 Zamiast przewijanych logów, `npm run bot` odświeża w terminalu jeden ekran
 stanu (co `DASHBOARD_REFRESH_MS`, domyślnie 1s): aktualną cenę, blok Slotu A
-i blok Slotu B - każdy z pozycją (jeśli otwarta), live PnL, tym ile zostałoby
-netto gdyby sprzedać teraz, celem sprzedaży - plus zrealizowany PnL (oba
-sloty razem), salda i spread puli. Pełny log zdarzeń nadal leci do
-`data/bot.log`.
+i blok Slotu B - każdy z pozycją (jeśli otwarta), live PnL **w procentach i
+w dolarach**, tym ile zostałoby netto gdyby sprzedać teraz, celem sprzedaży,
+statusem trailing stopu - plus zrealizowany PnL (oba sloty razem), ile jest
+aktualnie "w rynku", salda i spread puli. Na dole ekranu widać też
+**ostatnie kilka transakcji** (obu slotów, najnowsza na górze) - nie trzeba
+zaglądać do `data/trades.csv`, żeby zobaczyć co się działo w ostatniej
+godzinie. Pełny log zdarzeń nadal leci do `data/bot.log`, a kompletna
+historia zawsze jest w `data/trades.csv`.
 
 W tym samym terminalu działają komendy (wpisz i Enter). Domyślny slot to
 `a`, gdy pominięty:
