@@ -459,19 +459,18 @@ komendą:
 npm run bot:all
 ```
 
-Jeśli masz zainstalowany Windows Terminal, `npm run bot:all` otwiera A/B(/C)
-jako **panele w jednym oknie** (obok siebie, jak w Windows Terminal),
-zamiast trzech osobnych okien - dashboard każdej wersji nadal rysuje tylko
-swój własny panel, więc się nie gryzą. Bez Windows Terminal skrypt spada do
-starego trybu: trzy osobne okna.
+Dashboard każdej wersji co sekundę czyści i przerysowuje cały ekran, więc
+trzy instancje **nie mogą** dzielić jednego okna terminala - `npm run bot:all`
+otwiera je jako trzy osobne okna, nie trzy panele w jednym.
 
-Żeby wpisać jedną komendę (np. `panic`) i wysłać ją do wszystkich naraz:
-kliknij w dowolny panel, `Ctrl+Shift+P` → wpisz "broadcast" → **"Toggle
-broadcast input to all panes"**. Od tej chwili to, co wpiszesz, trafia do
-wszystkich paneli jednocześnie - wyłączasz tą samą komendą jeszcze raz.
-(Jeśli boty wystartowały w osobnych oknach, przeciągnij ich zakładki na
-siebie, żeby stały się panelami jednego okna, zanim użyjesz broadcastu -
-broadcast działa tylko między panelami tego samego okna.)
+Jeśli chcesz wpisywać jedną komendę (np. `panic`) i mieć ją wysłaną do
+wszystkich naraz, Windows Terminal ma to wbudowane: przeciągnij zakładki
+trzech okien na siebie, żeby stały się panelami jednego okna Windows
+Terminal (albo podziel widok ręcznie, `Alt+Shift+D`), potem kliknij w
+dowolny panel, `Ctrl+Shift+P` → wpisz "broadcast" → **"Toggle broadcast
+input to all panes"**. Od tej chwili to, co wpiszesz, trafia do wszystkich
+zaznaczonych paneli jednocześnie, a każdy z nich nadal rysuje swój własny
+dashboard bez konfliktu. Wyłączasz tą samą komendą jeszcze raz.
 
 Po kilku godzinach porównaj `data/trades.csv`, `data/trades-b.csv` i
 `data/trades-c.csv` - liczba flipów, zrealizowany PnL, ile razy trailing
