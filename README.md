@@ -50,10 +50,10 @@ Dlatego domyślne ustawienia to:
 
 Im większa transakcja, tym mniejszy % zjadają opłaty sieciowe - przy $200+
 nawet 3-4% celu brutto już ma sens. Przy $20-30 lepiej trzymać się 6%+, bo
-stałe opłaty sieciowe to relatywnie duży kawałek. Żaden slot nie ma stałej
-kwoty w dolarach - to `SLOT_A_SIZE_PERCENT`/`SLOT_B_SIZE_PERCENT` (domyślnie
-30%+30%) aktualnego salda ponad `MIN_SOL_RESERVE`, więc wielkość transakcji
-rośnie/maleje razem z kontem w miarę zysków/strat.
+stałe opłaty sieciowe to relatywnie duży kawałek. Każdy slot ma **stałą**
+kwotę: `SLOT_A_SIZE_PERCENT`/`SLOT_B_SIZE_PERCENT` (domyślnie 30%+30%)
+salda **startowego**, nie aktualnego - więc wielkość pojedynczej transakcji
+się nie zmienia, nawet jak konto urośnie albo skurczy się od PnL.
 
 Te liczby to punkt startowy, nie wyrocznia - realny spread zależy od
 płynności konkretnej puli w danym momencie, dlatego bot i tak liczy to na
@@ -129,7 +129,10 @@ wrócić do sztywnego `TARGET_GAIN_PERCENT`.
 ## Dwa sloty: Slot A + Slot B jako "dobicie"
 
 Bot prowadzi **dwie niezależne pozycje jednocześnie**, każda po
-`SLOT_A_SIZE_PERCENT`/`SLOT_B_SIZE_PERCENT` portfela (domyślnie 30%+30%):
+`SLOT_A_SIZE_PERCENT`/`SLOT_B_SIZE_PERCENT` (domyślnie 30%+30%) - policzone
+**od salda startowego**, nie od aktualnego (patrz sekcja o wielkości
+transakcji wyżej). Przy $1000 na start to $300 do Slotu A i $300 do Slotu
+B, zawsze, niezależnie od tego jak zmienia się saldo w trakcie handlu:
 
 - **Slot A** działa dokładnie jak opisano wyżej - samodzielnie kupuje,
   sprzedaje, odkupuje na spadku. Główna, "zwykła" pozycja.
@@ -225,7 +228,7 @@ src/
                     live: podpisanie i wysłanie transakcji)
   ledger.ts      - trwały stan (data/state.json) + log transakcji (data/trades.csv)
   wallet.ts       - wczytanie klucza portfela (tylko tryb live)
-  sizing.ts       - wielkość automatycznego kupna jako % salda
+  sizing.ts       - wielkość automatycznego kupna jako stały % salda startowego
   volatility.ts   - zmienność/adaptacyjny cel, współdzielone z scripts/analyzeVolatility.ts
   dexscreener.ts  - historyczna zmiana ceny (5m/1h/6h/24h) dla scripts/analyzeVolatility.ts
   cli/

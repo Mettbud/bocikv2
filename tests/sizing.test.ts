@@ -1,20 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { computePortfolioTradeUsd } from "../src/sizing.js";
+import { computeFixedSlotTradeUsd } from "../src/sizing.js";
 
-describe("computePortfolioTradeUsd", () => {
-  it("spends sizePercent of the balance above the reserve", () => {
-    // 1 SOL balance, 0.05 reserved, $150/SOL, 50% size -> 0.475 SOL * $150 * 0.5
-    const usd = computePortfolioTradeUsd(1, 0.05, 150, 50);
-    expect(usd).toBeCloseTo(0.95 * 150 * 0.5, 6);
+describe("computeFixedSlotTradeUsd", () => {
+  it("is a fixed % of the starting portfolio value", () => {
+    expect(computeFixedSlotTradeUsd(1000, 30)).toBe(300);
+    expect(computeFixedSlotTradeUsd(1000, 30)).toBe(300); // stays 300 no matter how many times asked
   });
 
-  it("never goes negative when the balance is below the reserve", () => {
-    expect(computePortfolioTradeUsd(0.02, 0.05, 150, 50)).toBe(0);
+  it("does not depend on the current balance", () => {
+    // Same starting value, called repeatedly (as if the account had since
+    // grown or shrunk) - always the same target.
+    expect(computeFixedSlotTradeUsd(1000, 30)).toBe(computeFixedSlotTradeUsd(1000, 30));
   });
 
-  it("compounds up as the balance grows", () => {
-    const before = computePortfolioTradeUsd(1, 0.05, 150, 50);
-    const after = computePortfolioTradeUsd(2, 0.05, 150, 50);
-    expect(after).toBeGreaterThan(before * 1.9);
+  it("never goes negative", () => {
+    expect(computeFixedSlotTradeUsd(-50, 30)).toBe(0);
   });
 });

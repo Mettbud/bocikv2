@@ -30,9 +30,12 @@ const envSchema = z.object({
   TRADING_MODE: z.enum(["paper", "live"]).default("paper"),
   PAPER_BALANCE_USD: numeric(1000),
 
-  // Two independent slots, each sized as a % of the currently spendable
-  // balance (SOL balance minus MIN_SOL_RESERVE) - not a fixed dollar
-  // figure, so each compounds with realized PnL. "buy <usd>" from the
+  // Two independent slots, each sized as a fixed % of the STARTING
+  // portfolio value (PAPER_BALANCE_USD in paper mode, or whatever the
+  // wallet holds the very first time the bot runs in live mode) - not a %
+  // of the current balance. $1000 to start and SLOT_A_SIZE_PERCENT=30
+  // means Slot A always targets $300, whether the account is later at
+  // $1200 or $600 - nothing compounds automatically. "buy <usd>" from the
   // console still lets you force an exact amount for a one-off trade.
   // Slot A runs the flip strategy on its own. Slot B only ever buys as
   // "reinforcement" while Slot A is open and underwater - see the

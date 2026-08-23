@@ -11,14 +11,25 @@ export interface PersistedState {
   paperTokenBalance: number;
   /** Sum of (sell proceeds - buy cost) across every completed flip, in USD, both slots combined. */
   realizedPnlUsd: number;
+  /**
+   * The portfolio's USD value the FIRST time the bot ever ran (or the last
+   * paper reset) - each slot's buy size is a fixed % of THIS, not of the
+   * current balance, so it never silently compounds or shrinks trade size
+   * as PnL accumulates. Captured once and then carried forward untouched.
+   */
+  initialPortfolioUsd: number;
 }
 
-/** Older single-slot state files only had `flip`, not `slotA`/`slotB`. */
+/** Older single-slot state files only had `flip`, not `slotA`/`slotB`/`initialPortfolioUsd`. */
 interface LegacySingleSlotState {
   flip?: FlipState;
 }
 
-export function loadState(config: BotConfig, defaultSolBalance: number): PersistedState {
+export function loadState(
+  config: BotConfig,
+  defaultSolBalance: number,
+  defaultInitialPortfolioUsd: number,
+): PersistedState {
   const path = config.files.state;
   if (existsSync(path)) {
     const raw = JSON.parse(readFileSync(path, "utf8")) as Partial<PersistedState> & LegacySingleSlotState;
@@ -29,6 +40,7 @@ export function loadState(config: BotConfig, defaultSolBalance: number): Persist
       paperSolBalance: raw.paperSolBalance ?? defaultSolBalance,
       paperTokenBalance: raw.paperTokenBalance ?? 0,
       realizedPnlUsd: raw.realizedPnlUsd ?? 0,
+      initialPortfolioUsd: raw.initialPortfolioUsd ?? defaultInitialPortfolioUsd,
     };
   }
   return {
@@ -37,6 +49,7 @@ export function loadState(config: BotConfig, defaultSolBalance: number): Persist
     paperSolBalance: defaultSolBalance,
     paperTokenBalance: 0,
     realizedPnlUsd: 0,
+    initialPortfolioUsd: defaultInitialPortfolioUsd,
   };
 }
 

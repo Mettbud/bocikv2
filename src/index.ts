@@ -19,7 +19,7 @@ import {
 } from "./strategy.js";
 import { appendTrade, loadState, saveState, type PersistedState } from "./ledger.js";
 import { executeLeg, priceLeg } from "./trader.js";
-import { computePortfolioTradeUsd } from "./sizing.js";
+import { computeFixedSlotTradeUsd } from "./sizing.js";
 import { computeAdaptiveTargetPercent, trimOldSamples, windowStats, type PriceSample } from "./volatility.js";
 import { renderDashboard, type DashboardState, type SlotDashboardState } from "./cli/dashboard.js";
 import { startCommandLoop, type SlotKey } from "./cli/commands.js";
@@ -57,7 +57,20 @@ async function main() {
   const tokenDecimals = await getMintDecimals(connection, tokenMint);
 
   const initialSolUsd = await solPrice.getPrice();
-  let s: PersistedState = loadState(config, config.paper.startingBalanceUsd / initialSolUsd);
+  // Each slot's buy size is a fixed % of THIS value (see sizing.ts), not of
+  // whatever the balance happens to be later. Paper mode's reference is the
+  // configured starting balance; live mode's is whatever the wallet
+  // actually holds the very first time the bot runs - captured once, then
+  // persisted and never silently recomputed.
+  const defaultInitialPortfolioUsd =
+    config.mode === "live" && owner
+      ? (await getSolBalanceSol(connection, owner)) * initialSolUsd
+      : config.paper.startingBalanceUsd;
+  let s: PersistedState = loadState(
+    config,
+    config.paper.startingBalanceUsd / initialSolUsd,
+    defaultInitialPortfolioUsd,
+  );
 
   // --- live display state, rebuilt every tick / trade ---------------------
   let latestPriceUsd: number | undefined;
@@ -380,13 +393,11 @@ async function main() {
     const solBalance = config.mode === "live" && owner ? await getSolBalanceSol(connection, owner) : s.paperSolBalance;
 
     // A manual "buy <usd>" forces an exact amount; the automatic strategy
-    // sizes every buy as this slot's SIZE_PERCENT of the spendable balance,
-    // so each slot's position compounds with the account instead of
-    // staying pinned to a fixed dollar figure.
-    const usdAmount =
-      usdAmountOverride ?? computePortfolioTradeUsd(solBalance, config.trade.minSolReserve, solUsd, sizePercentFor(slotKey));
+    // sizes every buy as this slot's SIZE_PERCENT of the STARTING portfolio
+    // value (fixed, does not compound with the account) - see sizing.ts.
+    const usdAmount = usdAmountOverride ?? computeFixedSlotTradeUsd(s.initialPortfolioUsd, sizePercentFor(slotKey));
     if (usdAmount <= 0) {
-      const msg = `skipping buy (Slot ${slotKey}) - nothing spendable above MIN_SOL_RESERVE`;
+      const msg = `skipping buy (Slot ${slotKey}) - computed trade size is $0 (check SLOT_${slotKey}_SIZE_PERCENT)`;
       log.warn(msg);
       if (opts.tag === "MANUAL") console.log(msg);
       return;
@@ -631,6 +642,7 @@ async function main() {
           paperSolBalance: config.paper.startingBalanceUsd / solUsd,
           paperTokenBalance: 0,
           realizedPnlUsd: 0,
+          initialPortfolioUsd: config.paper.startingBalanceUsd,
         };
         live.A = freshSlotLive();
         live.B = freshSlotLive();
@@ -705,9 +717,7 @@ async function main() {
       nextTargetGainPercent: flip.phase === "AWAITING_BUY" ? computeCurrentTargetGainPercent() : undefined,
       staticTargetGainPercent: config.strategy.targetGainPercent,
       nextBuyUsdEstimate:
-        flip.phase === "AWAITING_BUY" && latestSolUsd !== undefined
-          ? computePortfolioTradeUsd(latestSolBalance, config.trade.minSolReserve, latestSolUsd, sizePercentFor(slotKey))
-          : undefined,
+        flip.phase === "AWAITING_BUY" ? computeFixedSlotTradeUsd(s.initialPortfolioUsd, sizePercentFor(slotKey)) : undefined,
       buyImpactPercent: live[slotKey].buyImpactPercent,
       sellImpactPercent: live[slotKey].sellImpactPercent,
       roundTripCostPercent: live[slotKey].roundTripCostPercent,
