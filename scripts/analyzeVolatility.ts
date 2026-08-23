@@ -1,4 +1,6 @@
 import "dotenv/config";
+import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 import { PublicKey } from "@solana/web3.js";
 import { loadConfig, type BotConfig } from "../src/config.js";
 import { JupiterClient } from "../src/jupiter.js";
@@ -274,7 +276,12 @@ function withTimeout<T>(promise: Promise<T>, ms: number, timeoutMessage: string)
 
 // Only run when executed directly ("npm run analyze") - not when the pure
 // helpers above are imported for unit testing.
-const isMainModule = process.argv[1] !== undefined && import.meta.url === `file://${process.argv[1]}`;
+// Compare resolved OS paths, not raw URL strings - on Windows
+// import.meta.url is "file:///C:/..." (forward slashes, %-encoded) while
+// process.argv[1] is "C:\..." (backslashes), so a naive string comparison
+// never matches there and main() silently never ran.
+const isMainModule =
+  process.argv[1] !== undefined && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
 if (isMainModule) {
   main().catch((err) => {
     console.error("fatal error:", err);
