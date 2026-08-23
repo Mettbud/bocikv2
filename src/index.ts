@@ -6,6 +6,7 @@ import { loadWalletKeypair } from "./wallet.js";
 import { JupiterClient, priceImpactPercent } from "./jupiter.js";
 import { getConnection, getMintDecimals, getSolBalanceSol, getTokenBalanceUi, SolPriceTracker } from "./chain.js";
 import { estimateRoundTripCostPercent, netProfitPercent } from "./costModel.js";
+import { fetchDexScreenerSnapshot } from "./dexscreener.js";
 import {
   afterBuy,
   afterSell,
@@ -93,6 +94,31 @@ async function main() {
     config.paper.startingBalanceUsd / initialSolUsd,
     defaultInitialPortfolioUsd,
   );
+
+  // Jupiter has no historical endpoint - live price history starts empty
+  // on every restart, so without this every adaptive calculation (sell
+  // target, dual-trigger, breakout pullback) would fall back to the same
+  // flat static default for the first VOLATILITY_LOOKBACK_MS, identical
+  // across every restart regardless of how the market is actually moving
+  // right now. One best-effort DexScreener snapshot at startup gives a
+  // real, currently-measured 5-minute move instead - see
+  // currentTypicalMovePercent() below. If this fails (network hiccup,
+  // token not indexed yet), everything just falls back to the old static
+  // defaults exactly as before this existed.
+  let startupTypicalMovePercent: number | undefined;
+  try {
+    const snapshot = await fetchDexScreenerSnapshot(config.token.mint);
+    if (snapshot?.priceChangePercent.m5 !== undefined) {
+      startupTypicalMovePercent = Math.abs(snapshot.priceChangePercent.m5);
+      log.info("seeded startup volatility estimate from DexScreener", {
+        m5PriceChangePercent: snapshot.priceChangePercent.m5,
+      });
+    }
+  } catch (err) {
+    log.warn("could not fetch DexScreener snapshot for startup volatility seed - using static fallback", {
+      error: String((err as Error).message ?? err),
+    });
+  }
 
   // --- live display state, rebuilt every tick / trade ---------------------
   let latestPriceUsd: number | undefined;
@@ -533,12 +559,28 @@ async function main() {
    * and MAX_ROUND_TRIP_COST_PERCENT (real, live-quoted costs) still gate
    * every actual trade regardless of what this returns.
    */
+  /**
+   * The typical-move input shared by every adaptive calculation below:
+   * live in-memory price history once there's enough of it, otherwise the
+   * one-time DexScreener snapshot fetched at startup (see main()) - a
+   * real, currently-measured estimate instead of always falling back to a
+   * flat static default for the first VOLATILITY_LOOKBACK_MS after every
+   * restart. Undefined only when BOTH are unavailable (DexScreener didn't
+   * have this token, or the fetch failed) - callers fall back to their own
+   * static default in that case, exactly as before this existed.
+   */
+  function currentTypicalMovePercent(): number | undefined {
+    const stat = windowStats(priceHistory, config.strategy.volatilityLookbackMs);
+    if (stat.count > 0) return stat.medianAbsPercent;
+    return startupTypicalMovePercent;
+  }
+
   function computeCurrentTargetGainPercent(): number {
     if (!config.strategy.adaptiveTargetEnabled) return config.strategy.targetGainPercent;
-    const stat = windowStats(priceHistory, config.strategy.volatilityLookbackMs);
-    if (stat.count === 0) return config.strategy.targetGainPercent;
+    const typicalMove = currentTypicalMovePercent();
+    if (typicalMove === undefined) return config.strategy.targetGainPercent;
     return computeAdaptiveTargetPercent(
-      stat.medianAbsPercent,
+      typicalMove,
       config.strategy.adaptiveTargetMultiplier,
       config.strategy.adaptiveTargetMinPercent,
       config.strategy.adaptiveTargetMaxPercent,
@@ -548,15 +590,16 @@ async function main() {
   /**
    * How far underwater Slot A must be before Slot B reinforces it, right
    * now. Same math as the adaptive target, different config knobs. With no
-   * history yet, falls back to the MAX (hardest to reach) rather than the
-   * min - safer to require a bigger confirmed drop than to reinforce on a
-   * guess before we've actually measured anything.
+   * estimate at all (no live history AND no startup snapshot), falls back
+   * to the MAX (hardest to reach) rather than the min - safer to require a
+   * bigger confirmed drop than to reinforce on a guess before we've
+   * actually measured anything.
    */
   function computeCurrentTriggerDropPercent(): number {
-    const stat = windowStats(priceHistory, config.strategy.volatilityLookbackMs);
-    if (stat.count === 0) return config.strategy.dualTriggerMaxPercent;
+    const typicalMove = currentTypicalMovePercent();
+    if (typicalMove === undefined) return config.strategy.dualTriggerMaxPercent;
     return computeAdaptiveTargetPercent(
-      stat.medianAbsPercent,
+      typicalMove,
       config.strategy.dualTriggerMultiplier,
       config.strategy.dualTriggerMinPercent,
       config.strategy.dualTriggerMaxPercent,
@@ -565,10 +608,10 @@ async function main() {
 
   /** Same idea as computeCurrentTriggerDropPercent, for Slot C's deeper tier. */
   function computeCurrentSlotCTriggerDropPercent(): number {
-    const stat = windowStats(priceHistory, config.strategy.volatilityLookbackMs);
-    if (stat.count === 0) return config.strategy.slotCTriggerMaxPercent;
+    const typicalMove = currentTypicalMovePercent();
+    if (typicalMove === undefined) return config.strategy.slotCTriggerMaxPercent;
     return computeAdaptiveTargetPercent(
-      stat.medianAbsPercent,
+      typicalMove,
       config.strategy.slotCTriggerMultiplier,
       config.strategy.slotCTriggerMinPercent,
       config.strategy.slotCTriggerMaxPercent,
@@ -577,10 +620,10 @@ async function main() {
 
   /** How far Slot A must pull back from a breakout peak before buying into it, right now. */
   function computeCurrentBreakoutPullbackPercent(): number {
-    const stat = windowStats(priceHistory, config.strategy.volatilityLookbackMs);
-    if (stat.count === 0) return config.strategy.breakoutBuyMaxPercent;
+    const typicalMove = currentTypicalMovePercent();
+    if (typicalMove === undefined) return config.strategy.breakoutBuyMaxPercent;
     return computeAdaptiveTargetPercent(
-      stat.medianAbsPercent,
+      typicalMove,
       config.strategy.breakoutBuyMultiplier,
       config.strategy.breakoutBuyMinPercent,
       config.strategy.breakoutBuyMaxPercent,

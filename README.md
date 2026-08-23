@@ -142,6 +142,21 @@ jaki cel policzyłby następny zakup już teraz (`Next target: adaptive,
 aktualnie liczyłby +X%`). Wyłącz `ADAPTIVE_TARGET_ENABLED=false`, żeby
 wrócić do sztywnego `TARGET_GAIN_PERCENT`.
 
+**Zaraz po starcie (świeży restart)** bot jeszcze nie ma własnej, żywej
+historii cen - Jupiter nie ma endpointu historycznego, więc bufor zawsze
+zaczyna się pusty. Zamiast liczyć wtedy cel/próg na sztywnym
+`TARGET_GAIN_PERCENT` (ta sama liczba po każdym restarcie, każdego
+portfela, bez związku z tym co token akurat robi - stąd np. zawsze "6%" na
+starcie mimo trzech różnych instancji), bot **raz, na starcie, pyta
+DexScreener** o realną zmianę ceny z ostatnich 5 minut i używa jej jako
+pierwszego oszacowania zmienności (dokładnie ten sam pomysł co historyczny
+snapshot w `npm run analyze`) - dopóki nie zbierze wystarczająco własnej
+historii live, po czym płynnie przechodzi na nią. To dotyczy nie tylko
+celu sprzedaży, ale też progów Slotu B/C i cofnięcia breakout buy - każdy
+z nich korzysta z tego samego, jednorazowego oszacowania. Best-effort: jeśli
+zapytanie się nie uda (np. token jeszcze nie zindeksowany), wraca do starego
+zachowania (sztywna wartość) bez żadnego błędu.
+
 ### Trailing stop: zamek na zysk, gdy rynek się nie decyduje
 
 Na rynku bocznym (cena kręci się np. między -3% a +3%, nigdy nie dobija do
