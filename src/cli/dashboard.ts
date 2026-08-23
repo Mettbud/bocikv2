@@ -32,19 +32,19 @@ export interface PositionSnapshot {
 }
 
 export interface ReinforcementInfo {
-  /** DUAL_SLOT_ENABLED - false means Slot B never buys at all. */
+  /** DUAL_SLOT_ENABLED (Slot B) / SLOT_C_ENABLED (Slot C) - false means this slot never buys at all. */
   enabled: boolean;
-  /** The live-computed drawdown Slot A must reach before Slot B reinforces. */
+  /** The live-computed drawdown Slot A must reach before this slot reinforces. */
   triggerDropPercent: number;
   /** Slot A's current unrealized %, when it holds a position (negative = underwater). */
   slotADrawdownPercent: number | undefined;
 }
 
 export interface SlotDashboardState {
-  label: "A" | "B";
+  label: "A" | "B" | "C";
   sizePercent: number;
   position: PositionSnapshot | undefined;
-  /** Slot A only: rebuy trigger below its own last sell. Slot B never rebuys on its own. */
+  /** Slot A only: rebuy trigger below its own last sell. Slots B/C never rebuy on their own. */
   rebuyTriggerUsd: number | undefined;
   lastSellPriceUsd: number | undefined;
   completedFlips: number;
@@ -57,7 +57,7 @@ export interface SlotDashboardState {
   roundTripCostPercent: number | undefined;
   maxRoundTripCostPercent: number;
   minNetProfitPercent: number;
-  /** Slot B only - undefined for Slot A. */
+  /** Slots B/C only - undefined for Slot A. */
   reinforcement: ReinforcementInfo | undefined;
   /** Slot A only, and only while BREAKOUT_BUY_ENABLED - undefined otherwise. */
   breakoutBuy: BreakoutBuyInfo | undefined;
@@ -71,7 +71,7 @@ export interface BreakoutBuyInfo {
 
 export interface RecentTrade {
   ageMs: number;
-  slot: "A" | "B";
+  slot: "A" | "B" | "C";
   side: "BUY" | "SELL";
   tokenAmount: number;
   priceUsd: number;
@@ -87,7 +87,9 @@ export interface DashboardState {
   priceUsd: number | undefined;
   slotA: SlotDashboardState;
   slotB: SlotDashboardState;
-  /** Combined across both slots. */
+  /** Opt-in third tier - undefined unless SLOT_C_ENABLED, so it's simply not shown otherwise. */
+  slotC: SlotDashboardState | undefined;
+  /** Combined across all open slots. */
   realizedPnlUsd: number;
   solBalance: number;
   tokenBalance: number;
@@ -115,9 +117,13 @@ export function formatDashboard(s: DashboardState): string {
   lines.push(...formatSlot(s.slotA, s.tokenSymbol));
   lines.push("");
   lines.push(...formatSlot(s.slotB, s.tokenSymbol));
+  if (s.slotC) {
+    lines.push("");
+    lines.push(...formatSlot(s.slotC, s.tokenSymbol));
+  }
 
   lines.push("");
-  lines.push(`Realized PnL (oba sloty): ${colorize(usd(s.realizedPnlUsd, 2), signColor(s.realizedPnlUsd))}`);
+  lines.push(`Realized PnL (wszystkie sloty): ${colorize(usd(s.realizedPnlUsd, 2), signColor(s.realizedPnlUsd))}`);
   const investedPctLabel = s.investedPercentOfEquity !== undefined ? ` (${s.investedPercentOfEquity.toFixed(1)}% portfela)` : "";
   lines.push(`W rynku teraz:            ${usd(s.investedUsd, 2)}${investedPctLabel}`);
 
@@ -186,8 +192,9 @@ function formatSlot(slot: SlotDashboardState, tokenSymbol: string): string[] {
     }
   } else if (slot.reinforcement) {
     const r = slot.reinforcement;
+    const disabledFlag = slot.label === "B" ? "DUAL_SLOT_ENABLED=false" : "SLOT_C_ENABLED=false";
     if (!r.enabled) {
-      lines.push(`  ${colorize("Wyłączony (DUAL_SLOT_ENABLED=false)", colors.DIM)}`);
+      lines.push(`  ${colorize(`Wyłączony (${disabledFlag})`, colors.DIM)}`);
     } else if (r.slotADrawdownPercent === undefined) {
       lines.push(`  Czeka na otwartą pozycję w Slocie A.`);
     } else {
@@ -269,6 +276,6 @@ export function renderDashboard(s: DashboardState): void {
   process.stdout.write("\x1b[2J\x1b[3J\x1b[H");
   console.log(formatDashboard(s));
   console.log(
-    "\ncommands: buy <usd> [a|b]  sell [percent] [a|b]  panic [a|b]  reset  status  quit",
+    "\ncommands: buy [usd] [a|b|c]  sell [percent] [a|b|c]  panic [a|b|c]  reset  status  quit",
   );
 }

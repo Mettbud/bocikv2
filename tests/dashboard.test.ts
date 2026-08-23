@@ -33,6 +33,7 @@ const base: DashboardState = {
   priceUsd: 0.02521136,
   slotA: flatSlotA,
   slotB: flatSlotB,
+  slotC: undefined,
   realizedPnlUsd: 0,
   solBalance: 0.05,
   tokenBalance: 0,
@@ -125,6 +126,26 @@ describe("formatDashboard", () => {
       slotB: { ...flatSlotB, reinforcement: { enabled: false, triggerDropPercent: 8, slotADrawdownPercent: undefined } },
     });
     expect(out).toContain("Wyłączony");
+    expect(out).toContain("DUAL_SLOT_ENABLED=false");
+  });
+
+  it("does not show a Slot C block when it's undefined (SLOT_C_ENABLED=false)", () => {
+    const out = formatDashboard(base);
+    expect(out).not.toContain("Slot C");
+  });
+
+  it("shows Slot C as its own block, disabled with its own flag name, when present", () => {
+    const flatSlotC: SlotDashboardState = { ...flatSlotA, label: "C", reinforcement: { enabled: false, triggerDropPercent: 12, slotADrawdownPercent: undefined } };
+    const out = formatDashboard({ ...base, slotC: flatSlotC });
+    expect(out).toContain("Slot C");
+    expect(out).toContain("SLOT_C_ENABLED=false");
+  });
+
+  it("shows Slot C waiting on Slot A's deeper drawdown, same as Slot B", () => {
+    const flatSlotC: SlotDashboardState = { ...flatSlotA, label: "C", reinforcement: { enabled: true, triggerDropPercent: 15, slotADrawdownPercent: -18 } };
+    const out = formatDashboard({ ...base, slotC: flatSlotC });
+    expect(out).toContain("Czeka aż Slot A będzie na");
+    expect(out).toContain("-15.00%");
   });
 
   it("shows the next buy size as a % of balance while flat", () => {

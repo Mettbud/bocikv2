@@ -1,7 +1,7 @@
 import { createInterface } from "node:readline";
 import type { Logger } from "../logger.js";
 
-export type SlotKey = "A" | "B";
+export type SlotKey = "A" | "B" | "C";
 
 export interface CommandDeps {
   logger: Logger;
@@ -36,6 +36,7 @@ function parseSlot(token: string | undefined): SlotKey | undefined {
   const lower = token.toLowerCase();
   if (lower === "a") return "A";
   if (lower === "b") return "B";
+  if (lower === "c") return "C";
   return undefined;
 }
 
@@ -79,7 +80,7 @@ export async function handleLine(line: string, deps: CommandDeps): Promise<void>
       percent ??= 100;
       slot ??= "A";
       if (percent <= 0 || percent > 100) {
-        console.log('usage: sell [percent] [a|b], e.g. "sell 50" or "sell b" or "sell 50 b"');
+        console.log('usage: sell [percent] [a|b|c], e.g. "sell 50" or "sell b" or "sell 50 b"');
         return;
       }
       await deps.manualSell(percent, slot);
@@ -99,7 +100,7 @@ export async function handleLine(line: string, deps: CommandDeps): Promise<void>
       return; // dashboard redraws on its own timer
     case "help":
       console.log(
-        "commands: buy [usd] [a|b]  sell [percent] [a|b]  panic [a|b]  reset  status  quit\n" +
+        "commands: buy [usd] [a|b|c]  sell [percent] [a|b|c]  panic [a|b|c]  reset  status  quit\n" +
           '  "buy" or "buy a" alone uses the slot\'s normal fixed size (e.g. 30% of the starting portfolio)',
       );
       return;

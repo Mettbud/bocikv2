@@ -6,6 +6,8 @@ import { type FlipState, initialFlipState } from "./strategy.js";
 export interface PersistedState {
   slotA: FlipState;
   slotB: FlipState;
+  /** Opt-in third reinforcement tier - see SLOT_C_ENABLED in config.ts. Always present (even when disabled) so the state shape is stable. */
+  slotC: FlipState;
   /** Only meaningful in paper mode - live balances always come from chain. */
   paperSolBalance: number;
   paperTokenBalance: number;
@@ -37,6 +39,7 @@ export function loadState(
       // Migrate a pre-dual-slot state file: its one position becomes Slot A.
       slotA: raw.slotA ?? raw.flip ?? initialFlipState(),
       slotB: raw.slotB ?? initialFlipState(),
+      slotC: raw.slotC ?? initialFlipState(),
       paperSolBalance: raw.paperSolBalance ?? defaultSolBalance,
       paperTokenBalance: raw.paperTokenBalance ?? 0,
       realizedPnlUsd: raw.realizedPnlUsd ?? 0,
@@ -46,6 +49,7 @@ export function loadState(
   return {
     slotA: initialFlipState(),
     slotB: initialFlipState(),
+    slotC: initialFlipState(),
     paperSolBalance: defaultSolBalance,
     paperTokenBalance: 0,
     realizedPnlUsd: 0,
@@ -61,7 +65,7 @@ export function saveState(config: BotConfig, state: PersistedState): void {
 export interface TradeRecord {
   timestampIso: string;
   mode: "paper" | "live";
-  slot: "A" | "B";
+  slot: "A" | "B" | "C";
   side: "BUY" | "SELL";
   price: number;
   tokenAmount: number;

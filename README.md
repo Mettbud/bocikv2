@@ -210,7 +210,7 @@ zachowania, dopóki go nie obniżysz). Ma to sens dla B, bo B i tak kupuje
 niższy próg pozwala mu złapać nawet niewielkie odbicie w górę zamiast
 czekać na duży ruch, którego wąskie pasmo może nigdy nie dać.
 
-## Dwa sloty: Slot A + Slot B jako "dobicie"
+## Sloty A + B (+ opcjonalny C) jako "dobicie"
 
 Bot prowadzi **dwie niezależne pozycje jednocześnie**, każda po
 `SLOT_A_SIZE_PERCENT`/`SLOT_B_SIZE_PERCENT` (domyślnie 30%+30%) - policzone
@@ -243,6 +243,33 @@ nigdy nie kupował - bot zachowuje się wtedy jak wersja jednosolotowa.
 Dashboard pokazuje oba sloty osobno, a Slot B dodatkowo linię w stylu
 `Czeka aż Slot A będzie na -8.00% (teraz: -5.20%)`, gdy Slot A jest otwarty
 ale jeszcze nie na tyle nisko.
+
+### Slot C - opcjonalny, jeszcze głębszy poziom dobicia (drabinka DCA)
+
+Wyłączony domyślnie (`SLOT_C_ENABLED=false`). Działa **dokładnie jak Slot
+B**, tym samym mechanizmem, tylko z **własnym, głębszym progiem**
+(`SLOT_C_TRIGGER_MULTIPLIER`/`MIN`/`MAX_PERCENT`, domyślnie 2× mnożnik i
+próg 10-22% zamiast 3-20% jak Slot B) - i **niezależnie od tego, czy Slot B
+akurat trzyma pozycję**. Slot B leci na swoim własnym cyklu (kupuje,
+sprzedaje, znowu czeka), więc uzależnianie Slotu C od chwilowej fazy Slotu
+B zrobiłoby wejścia C nieprzewidywalnymi - Slot C patrzy wyłącznie na to,
+jak głęboko pod wodą jest **Slot A**, tak samo jak Slot B.
+
+To jest w praktyce **drabinka DCA** (dokupowanie w miarę spadku): im
+głębszy dołek, tym lepsza cena wejścia dla C, dobre na rynku, który
+faktycznie odbija się od dna. Ale w realnym trendzie spadkowym każdy
+kolejny poziom dokłada kolejną porcję kapitału na kolejnej stracie - w
+najgorszym razie Slot A + Slot B + Slot C są otwarte jednocześnie.
+Dlatego domyślnie `SLOT_C_SIZE_PERCENT=20` jest mniejszy niż A/B, a
+`SLOT_C_TRIGGER_MAX_PERCENT=22` zostaje **poniżej** `STOP_LOSS_PERCENT=25`,
+z tego samego powodu co próg Slotu B.
+
+**Nie włączaj tego na głównej konfiguracji bez sprawdzenia najpierw**, czy
+ten konkretny token faktycznie zachowuje się jak odbijający się od dna
+(dobre dla C) czy jak trend spadkowy (złe dla C) - `npm run analyze` pokaże
+realny, zmierzony charakter ruchu ceny. Testuj na trzeciej, osobnej
+konfiguracji (`.env.c.example` → `.env.c`, patrz sekcja "Porównanie
+konfiguracji" niżej) zamiast włączać od razu na głównym koncie.
 
 ## Analiza rynku: ile CYBERLEEK faktycznie się rusza
 
@@ -364,18 +391,19 @@ wiarygodnym oszacowaniem tego, co dałaby prawdziwa transakcja - bez ryzykowania
    cykli, zanim zwiększysz stawkę. Rozważ też start z `DUAL_SLOT_ENABLED=false`,
    żeby najpierw zobaczyć jak radzi sobie sam Slot A.
 
-### Porównanie dwóch konfiguracji obok siebie (A/B)
+### Porównanie kilku konfiguracji obok siebie (A/B/C)
 
-Żeby przetestować dwa różne ustawienia równolegle (np. `.env` = wersja
+Żeby przetestować różne ustawienia równolegle (np. `.env` = wersja
 bezpieczna, `.env.b` z `BREAKOUT_BUY_ENABLED=true` żeby zobaczyć czy
-kupowanie na wybiciach faktycznie się opłaca) - **nie trzeba kopiować
-całego kodu**. Ten sam bot, dwa pliki `.env`, dwa terminale. Gotowy
-szablon wersji B (breakout buy włączony, osobne ścieżki na dane) jest już
-w repo jako `.env.b.example`:
+kupowanie na wybiciach faktycznie się opłaca, `.env.c` z `SLOT_C_ENABLED=true`
+żeby przetestować głębszą drabinkę dobicia) - **nie trzeba kopiować całego
+kodu**. Ten sam bot, osobny plik `.env.*` na instancję, osobny terminal na
+instancję. Gotowe szablony są już w repo:
 
 ```bash
-cp .env.b.example .env.b
-# uzupełnij WALLET_PRIVATE_KEY / JUPITER_API_KEY tak samo jak w .env
+cp .env.b.example .env.b   # wersja B: breakout buy włączony
+cp .env.c.example .env.c   # wersja C: Slot C (głębsze dobicie) włączony
+# uzupełnij WALLET_PRIVATE_KEY / JUPITER_API_KEY w każdym tak samo jak w .env
 ```
 
 Albo zrób to ręcznie z dowolnego innego punktu startowego:
@@ -384,8 +412,9 @@ Albo zrób to ręcznie z dowolnego innego punktu startowego:
 cp .env .env.b
 ```
 
-W `.env.b` zmień to, co chcesz porównać, oraz koniecznie te trzy ścieżki
-(żeby obie instancje nie nadpisywały sobie danych):
+W nowym pliku zmień to, co chcesz porównać, oraz koniecznie te trzy ścieżki
+(żeby instancje nie nadpisywały sobie nawzajem danych) - `.env.b.example` i
+`.env.c.example` mają to już ustawione:
 
 ```
 STATE_FILE=./data/state-b.json
@@ -393,22 +422,25 @@ TRADES_CSV=./data/trades-b.csv
 LOG_FILE=./data/bot-b.log
 ```
 
-Odpal obie (dwa terminale/dwa okna):
+Odpal tyle instancji, ile chcesz porównać (każda w osobnym terminalu):
 
 ```bash
 npm run bot                                    # wersja A, .env
 DOTENV_CONFIG_PATH=.env.b npm run bot          # wersja B, .env.b (Linux/Mac)
+DOTENV_CONFIG_PATH=.env.c npm run bot          # wersja C, .env.c (Linux/Mac)
 ```
 
-Na Windows (PowerShell) ustaw zmienną osobno:
+Na Windows (PowerShell) ustaw zmienną osobno, w każdym oknie:
 
 ```powershell
 $env:DOTENV_CONFIG_PATH=".env.b"; npm run bot
+$env:DOTENV_CONFIG_PATH=".env.c"; npm run bot
 ```
 
-Po kilku godzinach porównaj `data/trades.csv` i `data/trades-b.csv` -
-liczba flipów, zrealizowany PnL, ile razy trailing stop faktycznie
-zadziałał vs. ile razy był to fałszywy alarm odfiltrowany przez
+Po kilku godzinach porównaj `data/trades.csv`, `data/trades-b.csv` i
+`data/trades-c.csv` - liczba flipów, zrealizowany PnL, ile razy trailing
+stop faktycznie zadziałał vs. ile razy był to fałszywy alarm odfiltrowany
+przez
 potwierdzenie.
 
 ## Świadome uproszczenia względem `botrade`

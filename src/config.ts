@@ -54,6 +54,30 @@ const envSchema = z.object({
   DUAL_TRIGGER_MULTIPLIER: numeric(1),
   DUAL_TRIGGER_MIN_PERCENT: numeric(3),
   DUAL_TRIGGER_MAX_PERCENT: numeric(20),
+  // Opt-in third reinforcement tier, OFF by default - a deeper DCA-style
+  // rung below Slot B. Slot C only ever buys when Slot A's drawdown crosses
+  // its OWN (deeper) trigger, same mechanism as Slot B but independent of
+  // whether Slot B currently happens to be open (Slot B keeps cycling on
+  // its own schedule - gating C on B's transient phase would make C's
+  // entries unreliable). This works well in a genuinely mean-reverting /
+  // ranging market (a deeper dip usually means a better entry price for the
+  // eventual bounce) but adds real risk in a real downtrend - each tier
+  // commits more capital the further price falls, and in the worst case
+  // A+B+C are all open at once. Keep SLOT_C_SIZE_PERCENT smaller than
+  // A/B's, and keep SLOT_C_TRIGGER_MAX_PERCENT below STOP_LOSS_PERCENT for
+  // the same reason as DUAL_TRIGGER_MAX_PERCENT above. Try it on a
+  // side-by-side config first (README, A/B/C comparison section) before
+  // enabling on your primary one.
+  SLOT_C_ENABLED: boolFlag(false),
+  SLOT_C_SIZE_PERCENT: numeric(20),
+  SLOT_C_TRIGGER_MULTIPLIER: numeric(2),
+  SLOT_C_TRIGGER_MIN_PERCENT: numeric(10),
+  SLOT_C_TRIGGER_MAX_PERCENT: numeric(22),
+  // Same idea as SLOT_B_TRAILING_STOP_* - lets Slot C arm/trail at smaller
+  // moves than Slot A, since it's also a quick-flip reinforcement position,
+  // not a "ride to the full target" one. Defaults match Slot A/B's.
+  SLOT_C_TRAILING_STOP_ARM_PERCENT: numeric(4),
+  SLOT_C_TRAILING_STOP_PERCENT: numeric(2),
   MIN_SOL_RESERVE: numeric(0.05),
 
   // --- The flip strategy -----------------------------------------------
@@ -193,6 +217,7 @@ function buildConfig(env: z.infer<typeof envSchema>) {
     trade: {
       slotASizePercent: env.SLOT_A_SIZE_PERCENT,
       slotBSizePercent: env.SLOT_B_SIZE_PERCENT,
+      slotCSizePercent: env.SLOT_C_SIZE_PERCENT,
       minSolReserve: env.MIN_SOL_RESERVE,
     },
     strategy: {
@@ -211,12 +236,18 @@ function buildConfig(env: z.infer<typeof envSchema>) {
       dualTriggerMultiplier: env.DUAL_TRIGGER_MULTIPLIER,
       dualTriggerMinPercent: env.DUAL_TRIGGER_MIN_PERCENT,
       dualTriggerMaxPercent: env.DUAL_TRIGGER_MAX_PERCENT,
+      slotCEnabled: env.SLOT_C_ENABLED,
+      slotCTriggerMultiplier: env.SLOT_C_TRIGGER_MULTIPLIER,
+      slotCTriggerMinPercent: env.SLOT_C_TRIGGER_MIN_PERCENT,
+      slotCTriggerMaxPercent: env.SLOT_C_TRIGGER_MAX_PERCENT,
       slotARequireManualFirstBuy: env.SLOT_A_REQUIRE_MANUAL_FIRST_BUY,
       trailingStopEnabled: env.TRAILING_STOP_ENABLED,
       trailingStopArmPercent: env.TRAILING_STOP_ARM_PERCENT,
       trailingStopPercent: env.TRAILING_STOP_PERCENT,
       slotBTrailingStopArmPercent: env.SLOT_B_TRAILING_STOP_ARM_PERCENT,
       slotBTrailingStopPercent: env.SLOT_B_TRAILING_STOP_PERCENT,
+      slotCTrailingStopArmPercent: env.SLOT_C_TRAILING_STOP_ARM_PERCENT,
+      slotCTrailingStopPercent: env.SLOT_C_TRAILING_STOP_PERCENT,
       trailingStopConfirmationMs: env.TRAILING_STOP_CONFIRMATION_MS,
       trailingStopConfirmationTolerancePercent: env.TRAILING_STOP_CONFIRMATION_TOLERANCE_PERCENT,
       breakoutBuyEnabled: env.BREAKOUT_BUY_ENABLED,

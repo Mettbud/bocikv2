@@ -101,7 +101,7 @@ async function main() {
   let latestSolBalance = 0;
   let latestTokenBalance = 0;
   let latestSolUsd: number | undefined;
-  const live: Record<SlotKey, SlotLive> = { A: freshSlotLive(), B: freshSlotLive() };
+  const live: Record<SlotKey, SlotLive> = { A: freshSlotLive(), B: freshSlotLive(), C: freshSlotLive() };
   // Rolling in-memory price history driving the adaptive target/trigger -
   // not persisted, so it starts empty on every restart (falls back to
   // static/conservative defaults until enough of it has been rebuilt).
@@ -111,7 +111,7 @@ async function main() {
   // continuously, for each slot? Reset to null the moment it stops holding
   // (even for one tick) or the position closes - TRAILING_STOP_CONFIRMATION_MS
   // requires it to survive multiple consecutive ticks before actually firing.
-  const trailingStopPendingSinceMs: Record<SlotKey, number | null> = { A: null, B: null };
+  const trailingStopPendingSinceMs: Record<SlotKey, number | null> = { A: null, B: null, C: null };
   // Same confirmation pattern, for the opt-in breakout buy - Slot A only.
   let breakoutBuyPendingSinceMs: number | null = null;
 
@@ -126,20 +126,26 @@ async function main() {
   // --- small per-slot helpers ------------------------------------------
 
   function getFlip(slot: SlotKey): FlipState {
-    return slot === "A" ? s.slotA : s.slotB;
+    if (slot === "A") return s.slotA;
+    if (slot === "B") return s.slotB;
+    return s.slotC;
   }
   function setFlip(slot: SlotKey, next: FlipState): void {
     if (slot === "A") s.slotA = next;
-    else s.slotB = next;
+    else if (slot === "B") s.slotB = next;
+    else s.slotC = next;
   }
   function sizePercentFor(slot: SlotKey): number {
-    return slot === "A" ? config.trade.slotASizePercent : config.trade.slotBSizePercent;
+    if (slot === "A") return config.trade.slotASizePercent;
+    if (slot === "B") return config.trade.slotBSizePercent;
+    return config.trade.slotCSizePercent;
   }
-  /** Slot B can arm/trail at smaller moves than Slot A - see SLOT_B_TRAILING_STOP_* in config.ts. */
+  /** Slot B/C can arm/trail at smaller moves than Slot A - see SLOT_B/C_TRAILING_STOP_* in config.ts. */
   function trailingStopParamsFor(slot: SlotKey): { armPercent: number; trailPercent: number } {
-    return slot === "A"
-      ? { armPercent: config.strategy.trailingStopArmPercent, trailPercent: config.strategy.trailingStopPercent }
-      : { armPercent: config.strategy.slotBTrailingStopArmPercent, trailPercent: config.strategy.slotBTrailingStopPercent };
+    if (slot === "A") return { armPercent: config.strategy.trailingStopArmPercent, trailPercent: config.strategy.trailingStopPercent };
+    if (slot === "B")
+      return { armPercent: config.strategy.slotBTrailingStopArmPercent, trailPercent: config.strategy.slotBTrailingStopPercent };
+    return { armPercent: config.strategy.slotCTrailingStopArmPercent, trailPercent: config.strategy.slotCTrailingStopPercent };
   }
 
   log.info("bocik flip-bot starting", {
@@ -174,6 +180,7 @@ async function main() {
         : Promise.all([
             executeSell("A", 100, { requireProfitGate: false, tag: "PANIC" }),
             executeSell("B", 100, { requireProfitGate: false, tag: "PANIC" }),
+            executeSell("C", 100, { requireProfitGate: false, tag: "PANIC" }),
           ]).then(() => undefined),
     reset: resetPaperSession,
     onExit: stop,
@@ -219,6 +226,7 @@ async function main() {
 
     await evaluateSlotA(currentPriceUsd, solUsd);
     await evaluateSlotB(currentPriceUsd, solUsd);
+    await evaluateSlotC(currentPriceUsd, solUsd);
   }
 
   async function evaluateSlotA(currentPriceUsd: number, solUsd: number): Promise<void> {
@@ -258,6 +266,28 @@ async function main() {
     const triggerDropPercent = computeCurrentTriggerDropPercent();
     if (isReinforcementBuySignal(s.slotA, s.slotB, currentPriceUsd, triggerDropPercent)) {
       await executeBuy("B", undefined, { requireCostGate: true, tag: "AUTO" });
+    }
+  }
+
+  /**
+   * Opt-in (SLOT_C_ENABLED, default off) - a deeper DCA-style tier below
+   * Slot B. Same reinforcement mechanism as Slot B (reacts to Slot A's
+   * drawdown, never decides to buy on its own), just against a deeper
+   * trigger - and independent of whatever Slot B is doing right now (Slot B
+   * keeps cycling on its own schedule; gating C on B's transient phase
+   * would make C unreliable).
+   */
+  async function evaluateSlotC(currentPriceUsd: number, solUsd: number): Promise<void> {
+    const flip = s.slotC;
+    if (flip.phase === "AWAITING_SELL" && flip.buyPrice !== null) {
+      await evaluatePosition("C", currentPriceUsd, solUsd);
+      return;
+    }
+    if (flip.phase !== "AWAITING_BUY" || !config.strategy.slotCEnabled) return;
+
+    const triggerDropPercent = computeCurrentSlotCTriggerDropPercent();
+    if (isReinforcementBuySignal(s.slotA, s.slotC, currentPriceUsd, triggerDropPercent)) {
+      await executeBuy("C", undefined, { requireCostGate: true, tag: "AUTO" });
     }
   }
 
@@ -491,6 +521,18 @@ async function main() {
       config.strategy.dualTriggerMultiplier,
       config.strategy.dualTriggerMinPercent,
       config.strategy.dualTriggerMaxPercent,
+    );
+  }
+
+  /** Same idea as computeCurrentTriggerDropPercent, for Slot C's deeper tier. */
+  function computeCurrentSlotCTriggerDropPercent(): number {
+    const stat = windowStats(priceHistory, config.strategy.volatilityLookbackMs);
+    if (stat.count === 0) return config.strategy.slotCTriggerMaxPercent;
+    return computeAdaptiveTargetPercent(
+      stat.medianAbsPercent,
+      config.strategy.slotCTriggerMultiplier,
+      config.strategy.slotCTriggerMinPercent,
+      config.strategy.slotCTriggerMaxPercent,
     );
   }
 
@@ -834,6 +876,7 @@ async function main() {
         s = {
           slotA: freshFlipKeepingLastSell(s.slotA),
           slotB: freshFlipKeepingLastSell(s.slotB),
+          slotC: freshFlipKeepingLastSell(s.slotC),
           paperSolBalance: config.paper.startingBalanceUsd / solUsd,
           paperTokenBalance: 0,
           realizedPnlUsd: 0,
@@ -841,12 +884,14 @@ async function main() {
         };
         live.A = freshSlotLive();
         live.B = freshSlotLive();
+        live.C = freshSlotLive();
         recentTrades = [];
         trailingStopPendingSinceMs.A = null;
         trailingStopPendingSinceMs.B = null;
+        trailingStopPendingSinceMs.C = null;
         breakoutBuyPendingSinceMs = null;
         saveState(config, s);
-        const msg = `PAPER session reset (oba sloty) - fresh balance $${config.paper.startingBalanceUsd.toFixed(2)}`;
+        const msg = `PAPER session reset (wszystkie sloty) - fresh balance $${config.paper.startingBalanceUsd.toFixed(2)}`;
         setEvent(msg);
         log.info(msg);
       })
@@ -906,17 +951,16 @@ async function main() {
           }
         : undefined;
 
+    const slotADrawdownPercent =
+      s.slotA.phase === "AWAITING_SELL" && s.slotA.buyPrice !== null && latestPriceUsd !== undefined
+        ? grossMovePercent(s.slotA.buyPrice, latestPriceUsd)
+        : undefined;
     const reinforcement =
       slotKey === "B"
-        ? {
-            enabled: config.strategy.dualSlotEnabled,
-            triggerDropPercent: computeCurrentTriggerDropPercent(),
-            slotADrawdownPercent:
-              s.slotA.phase === "AWAITING_SELL" && s.slotA.buyPrice !== null && latestPriceUsd !== undefined
-                ? grossMovePercent(s.slotA.buyPrice, latestPriceUsd)
-                : undefined,
-          }
-        : undefined;
+        ? { enabled: config.strategy.dualSlotEnabled, triggerDropPercent: computeCurrentTriggerDropPercent(), slotADrawdownPercent }
+        : slotKey === "C"
+          ? { enabled: config.strategy.slotCEnabled, triggerDropPercent: computeCurrentSlotCTriggerDropPercent(), slotADrawdownPercent }
+          : undefined;
 
     const breakoutBuy =
       slotKey === "A" && config.strategy.breakoutBuyEnabled
@@ -958,7 +1002,11 @@ async function main() {
   function buildSnapshot(): DashboardState {
     const slotA = buildSlotSnapshot("A");
     const slotB = buildSlotSnapshot("B");
-    const investedUsd = (slotA.position?.positionValueUsd ?? 0) + (slotB.position?.positionValueUsd ?? 0);
+    // Slot C is opt-in - only shown on the dashboard once SLOT_C_ENABLED, so
+    // the layout for everyone else is unchanged.
+    const slotC = config.strategy.slotCEnabled ? buildSlotSnapshot("C") : undefined;
+    const investedUsd =
+      (slotA.position?.positionValueUsd ?? 0) + (slotB.position?.positionValueUsd ?? 0) + (slotC?.position?.positionValueUsd ?? 0);
     const equityUsd =
       latestSolUsd !== undefined ? latestSolBalance * latestSolUsd + investedUsd : undefined;
 
@@ -968,6 +1016,7 @@ async function main() {
       priceUsd: latestPriceUsd,
       slotA,
       slotB,
+      slotC,
       realizedPnlUsd: s.realizedPnlUsd,
       solBalance: latestSolBalance,
       tokenBalance: latestTokenBalance,
