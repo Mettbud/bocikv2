@@ -71,15 +71,26 @@ function histPct(value: number | undefined): string {
 }
 
 async function main() {
+  console.log("Start...\n");
   const config = loadConfig();
   const client = new JupiterClient(config);
   const connection = getConnection(config);
   const solPrice = new SolPriceTracker(client, config);
   const tokenMint = new PublicKey(config.token.mint);
-  const tokenDecimals = await getMintDecimals(connection, tokenMint);
   const solDecimals = 9;
 
+  // DexScreener first - it doesn't need our RPC at all, so it's the
+  // fastest way to see *something* on screen and confirm the process is
+  // actually alive, before we make any Solana RPC calls.
   await printHistoricalSnapshot(config);
+
+  console.log(`Łączę z RPC (${config.rpc.url}) i pobieram dane tokena...`);
+  const tokenDecimals = await withTimeout(
+    getMintDecimals(connection, tokenMint),
+    15_000,
+    "RPC nie odpowiedziało w 15s - sprawdź RPC_URL w .env, albo spróbuj innego publicznego RPC.",
+  );
+  console.log("Połączono.\n");
 
   const samples: Sample[] = [];
   const endAtMs = Date.now() + DURATION_MINUTES * 60_000;
@@ -98,14 +109,18 @@ async function main() {
 
   while (Date.now() < endAtMs) {
     try {
-      const solUsd = await solPrice.getPrice();
+      const solUsd = await withTimeout(solPrice.getPrice(), 15_000, "Jupiter (SOL/USD) nie odpowiedziało w 15s");
       const amountLamports = Math.round(config.priceReferenceSolAmount * 10 ** solDecimals);
-      const quote = await client.getQuote({
-        inputMint: config.token.solMint,
-        outputMint: config.token.mint,
-        amount: String(amountLamports),
-        slippageBps: config.execution.maxSlippageBps,
-      });
+      const quote = await withTimeout(
+        client.getQuote({
+          inputMint: config.token.solMint,
+          outputMint: config.token.mint,
+          amount: String(amountLamports),
+          slippageBps: config.execution.maxSlippageBps,
+        }),
+        15_000,
+        "Jupiter (quote) nie odpowiedziało w 15s",
+      );
       const tokenOut = Number(quote.outAmount) / 10 ** tokenDecimals;
       const priceUsd = (config.priceReferenceSolAmount / tokenOut) * solUsd;
       samples.push({ tMs: Date.now(), priceUsd });
@@ -247,6 +262,14 @@ function formatDuration(seconds: number): string {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** A hung RPC call should fail loudly with a clear message, not sit silently forever. */
+function withTimeout<T>(promise: Promise<T>, ms: number, timeoutMessage: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(timeoutMessage)), ms)),
+  ]);
 }
 
 // Only run when executed directly ("npm run analyze") - not when the pure
