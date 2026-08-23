@@ -971,7 +971,21 @@ function sleep(ms: number): Promise<void> {
 }
 
 main().catch((err) => {
+  // Node's console.error(err) inspects the whole object graph, which can
+  // itself throw on certain error shapes (e.g. undici/fetch errors with an
+  // unusual `cause`) and mask the real error. Print plain strings instead.
+  const message = err instanceof Error ? err.message : String(err);
+  const stack = err instanceof Error ? err.stack : undefined;
+  const cause = err instanceof Error && err.cause !== undefined ? String(err.cause) : undefined;
   // eslint-disable-next-line no-console
-  console.error("fatal error:", err);
+  console.error("fatal error:", message);
+  if (cause) {
+    // eslint-disable-next-line no-console
+    console.error("cause:", cause);
+  }
+  if (stack) {
+    // eslint-disable-next-line no-console
+    console.error(stack);
+  }
   process.exit(1);
 });
