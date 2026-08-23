@@ -1,5 +1,10 @@
 node_modules/
 dist/
 data/
+# Real per-instance configs (with secrets) - the .example templates for
+# these (.env.example, .env.b.example, .env.c.example) ARE tracked and
+# must stay that way.
 .env
+.env.b
+.env.c
 *.log
