@@ -6,8 +6,12 @@ export type SlotKey = "A" | "B";
 export interface CommandDeps {
   logger: Logger;
   mode: "paper" | "live";
-  /** Manual buy, bypassing the strategy's buy signal (still respects safety limits). */
-  manualBuy: (usdAmount: number, slot: SlotKey) => Promise<void>;
+  /**
+   * Manual buy, bypassing the strategy's buy signal (still respects safety
+   * limits). Omit usdAmount to use the slot's normal fixed size (% of the
+   * starting portfolio), same as an automatic buy would.
+   */
+  manualBuy: (usdAmount: number | undefined, slot: SlotKey) => Promise<void>;
   /** Manual sell of `percent`% of the given slot's position, bypassing the profit gate. */
   manualSell: (percent: number, slot: SlotKey) => Promise<void>;
   /** Sells a slot's whole position immediately, no questions asked. Omit slot to panic both. */
@@ -40,12 +44,21 @@ export async function handleLine(line: string, deps: CommandDeps): Promise<void>
 
   switch (cmd?.toLowerCase()) {
     case "buy": {
-      const usdAmount = Number(rest[0] ?? "0");
-      const slot = parseSlot(rest[1]) ?? "A";
-      if (!Number.isFinite(usdAmount) || usdAmount <= 0) {
-        console.log('usage: buy <usd amount> [a|b], e.g. "buy 50" or "buy 50 b"');
-        return;
+      // "buy", "buy a", "buy 50", "buy 50 b" - an explicit USD amount is
+      // optional; without one, manualBuy falls back to the slot's normal
+      // fixed size (% of the starting portfolio).
+      let usdAmount: number | undefined;
+      let slot: SlotKey | undefined;
+      for (const token of rest) {
+        const asSlot = parseSlot(token);
+        if (asSlot) {
+          slot = asSlot;
+          continue;
+        }
+        const asNumber = Number(token);
+        if (Number.isFinite(asNumber) && asNumber > 0) usdAmount = asNumber;
       }
+      slot ??= "A";
       await deps.manualBuy(usdAmount, slot);
       return;
     }
@@ -85,7 +98,10 @@ export async function handleLine(line: string, deps: CommandDeps): Promise<void>
     case "status":
       return; // dashboard redraws on its own timer
     case "help":
-      console.log("commands: buy <usd> [a|b]  sell [percent] [a|b]  panic [a|b]  reset  status  quit");
+      console.log(
+        "commands: buy [usd] [a|b]  sell [percent] [a|b]  panic [a|b]  reset  status  quit\n" +
+          '  "buy" or "buy a" alone uses the slot\'s normal fixed size (e.g. 30% of the starting portfolio)',
+      );
       return;
     case "quit":
     case "exit":

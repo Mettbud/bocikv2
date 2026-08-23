@@ -267,7 +267,8 @@ W tym samym terminalu działają komendy (wpisz i Enter). Domyślny slot to
 `a`, gdy pominięty:
 
 ```
-buy <usd> [a|b]       - kup ręcznie za tyle USD w danym slocie (pomija sygnał strategii, ale nie limity bezpieczeństwa)
+buy [usd] [a|b]       - kup ręcznie w danym slocie (pomija sygnał strategii, ale nie limity bezpieczeństwa); bez kwoty
+                         użyty jest normalny stały rozmiar slotu (SLOT_A/B_SIZE_PERCENT), tak jak przy zwykłym auto-kupnie
 sell [percent] [a|b]  - sprzedaj tyle % pozycji w danym slocie (domyślnie 100%), pomija wymóg minimalnego zysku netto
 panic [a|b]           - natychmiastowe wyjście z pozycji; bez argumentu wychodzi z OBU slotów
 reset                 - (tylko paper) zeruje saldo i oba sloty do stanu startowego
@@ -275,8 +276,10 @@ status                - wymusza odświeżenie (dashboard i tak odświeża się s
 quit / exit           - zamyka bota, zapisując stan
 ```
 
-Przykłady: `buy 50 b` (kup za $50 w Slocie B), `sell 50` (sprzedaj 50%
-Slotu A), `sell b` (sprzedaj całość Slotu B), `panic` (wyjdź ze wszystkiego).
+Przykłady: `buy` (kup w Slocie A za normalny % portfela), `buy b` (to samo
+w Slocie B), `buy 50 b` (wymuś dokładnie $50 w Slocie B), `sell 50`
+(sprzedaj 50% Slotu A), `sell b` (sprzedaj całość Slotu B), `panic`
+(wyjdź ze wszystkiego).
 
 ## Struktura kodu
 
