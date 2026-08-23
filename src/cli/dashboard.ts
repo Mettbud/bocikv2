@@ -129,7 +129,7 @@ export function formatDashboard(s: DashboardState): string {
 
   lines.push("");
   lines.push(`SOL balance:       ${s.solBalance.toFixed(6)}`);
-  lines.push(`${s.tokenSymbol} balance: ${s.tokenBalance.toLocaleString()}`);
+  lines.push(`${s.tokenSymbol} balance: ${s.tokenBalance.toLocaleString("en-US")}`);
   if (s.paperUsdBalance !== undefined) {
     lines.push(`Paper equity (SOL + pozycje): ${usd(s.paperUsdBalance, 2)}`);
   }
@@ -167,7 +167,7 @@ function formatSlot(slot: SlotDashboardState, tokenSymbol: string): string[] {
 
   if (slot.position) {
     const p = slot.position;
-    lines.push(`  Pozycja:       ${p.tokenAmount.toLocaleString()} ${tokenSymbol}`);
+    lines.push(`  Pozycja:       ${p.tokenAmount.toLocaleString("en-US")} ${tokenSymbol}`);
     lines.push(`  Wartość:       ${usd(p.positionValueUsd)}`);
     lines.push(`  Cena wejścia:  ${usd(p.buyPriceUsd, 8)}`);
     lines.push(
@@ -246,7 +246,7 @@ function formatSlot(slot: SlotDashboardState, tokenSymbol: string): string[] {
 
 function formatTradeLine(t: RecentTrade, tokenSymbol: string): string {
   const sideLabel = t.side === "BUY" ? colorize("KUPNO", colors.YELLOW) : colorize("SPRZEDAŻ", colors.GREEN);
-  const base = `[Slot ${t.slot}] ${sideLabel} ${t.tokenAmount.toLocaleString()} ${tokenSymbol} @ ${usd(t.priceUsd, 8)}`;
+  const base = `[Slot ${t.slot}] ${sideLabel} ${t.tokenAmount.toLocaleString("en-US")} ${tokenSymbol} @ ${usd(t.priceUsd, 8)}`;
   const detail =
     t.netProfitPercent !== undefined && t.netProfitUsd !== undefined
       ? ` (net ${colorize(pct(t.netProfitPercent), signColor(t.netProfitPercent))} / ${colorize(usd(t.netProfitUsd, 2), signColor(t.netProfitUsd))})`
