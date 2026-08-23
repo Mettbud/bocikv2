@@ -22,7 +22,7 @@ describe("flip strategy state machine", () => {
       buyLegPercent: 0.3,
       buyNetworkFeeLamports: 10_000,
       costUsd: 50,
-    });
+    }, 6);
     expect(isBuySignal(state, 0.5, 0)).toBe(false);
   });
 
@@ -31,7 +31,7 @@ describe("flip strategy state machine", () => {
       buyLegPercent: 0.3,
       buyNetworkFeeLamports: 10_000,
       costUsd: 50,
-    });
+    }, 6);
     state = afterSell(state, 1.1);
     expect(state.lastSellPrice).toBe(1.1);
 
@@ -50,7 +50,7 @@ describe("flip strategy state machine", () => {
       buyLegPercent: 0.3,
       buyNetworkFeeLamports: 10_000,
       costUsd: 50,
-    });
+    }, 6);
     const target = sellTargetPrice(1.0, 6);
     expect(target).toBeCloseTo(1.06, 5);
     expect(isSellSignal(state, 1.05, 6)).toBe(false);
@@ -75,13 +75,15 @@ describe("flip strategy state machine", () => {
       buyLegPercent: 0.3,
       buyNetworkFeeLamports: 10_000,
       costUsd: 50,
-    });
+    }, 6);
+    expect(state.targetGainPercent).toBe(6);
     state = afterSell(state, 1.06);
     expect(state.completedFlips).toBe(1);
     expect(state.phase).toBe("AWAITING_BUY");
     expect(state.buyPrice).toBeNull();
     expect(state.tokenAmount).toBeNull();
     expect(state.entryCost).toBeNull();
+    expect(state.targetGainPercent).toBeNull();
     expect(state.lastSellPrice).toBe(1.06);
   });
 });

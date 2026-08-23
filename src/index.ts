@@ -24,6 +24,7 @@ import {
 import { appendTrade, loadState, saveState, type PersistedState } from "./ledger.js";
 import { executeLeg, priceLeg } from "./trader.js";
 import { computePortfolioTradeUsd } from "./sizing.js";
+import { computeAdaptiveTargetPercent, trimOldSamples, windowStats, type PriceSample } from "./volatility.js";
 import { renderDashboard, type DashboardState } from "./cli/dashboard.js";
 import { startCommandLoop } from "./cli/commands.js";
 
@@ -57,6 +58,10 @@ async function main() {
   let latestTokenBalance = 0;
   let latestSolUsd: number | undefined;
   let latestSpreadPercent: number | undefined;
+  // Rolling in-memory price history driving the adaptive target - not
+  // persisted, so it starts empty on every restart (falls back to the
+  // static TARGET_GAIN_PERCENT until enough of it has been rebuilt).
+  let priceHistory: PriceSample[] = [];
 
   const setEvent = (message: string) => {
     lastEvent = { message, atMs: Date.now() };
@@ -66,6 +71,7 @@ async function main() {
     mode: config.mode,
     token: config.token.symbol,
     targetGainPercent: config.strategy.targetGainPercent,
+    adaptiveTargetEnabled: config.strategy.adaptiveTargetEnabled,
     minNetProfitPercent: config.strategy.minNetProfitPercent,
     maxRoundTripCostPercent: config.strategy.maxRoundTripCostPercent,
   });
@@ -120,6 +126,11 @@ async function main() {
     const currentPriceUsd = await getReferenceTokenPriceUsd(solUsd);
     latestPriceUsd = currentPriceUsd;
     latestSolUsd = solUsd;
+    const now = Date.now();
+    priceHistory.push({ tMs: now, priceUsd: currentPriceUsd });
+    // Keep a bit more than the lookback window so a fresh buy right after a
+    // restart still has full context, without the buffer growing forever.
+    priceHistory = trimOldSamples(priceHistory, now, config.strategy.volatilityLookbackMs * 2);
     await refreshBalances();
 
     if (s.flip.phase === "AWAITING_SELL" && s.flip.buyPrice !== null) {
@@ -183,7 +194,9 @@ async function main() {
       return;
     }
 
-    if (!isSellSignal(flip, currentPriceUsd, config.strategy.targetGainPercent)) return;
+    // Frozen at buy time (adaptive or static) - never recomputed mid-trade.
+    const targetGainPercent = flip.targetGainPercent ?? config.strategy.targetGainPercent;
+    if (!isSellSignal(flip, currentPriceUsd, targetGainPercent)) return;
 
     if (net < config.strategy.minNetProfitPercent) {
       if (config.log.logSkips) {
@@ -254,6 +267,29 @@ async function main() {
     });
     const solBack = Number(back.outAmount) / 10 ** solDecimals;
     return Math.max(0, ((solIn - solBack) / solIn) * 100);
+  }
+
+  /**
+   * The sell target a NEW buy would use right now: a multiple of how much
+   * the token has actually been moving over VOLATILITY_LOOKBACK_MS,
+   * clamped to [ADAPTIVE_TARGET_MIN_PERCENT, ADAPTIVE_TARGET_MAX_PERCENT].
+   * Falls back to the static TARGET_GAIN_PERCENT when adaptive targeting
+   * is off, or there isn't yet enough in-memory history to trust.
+   *
+   * This only decides WHEN a sale is even considered - MIN_NET_PROFIT_PERCENT
+   * and MAX_ROUND_TRIP_COST_PERCENT (real, live-quoted costs) still gate
+   * every actual trade regardless of what this returns.
+   */
+  function computeCurrentTargetGainPercent(): number {
+    if (!config.strategy.adaptiveTargetEnabled) return config.strategy.targetGainPercent;
+    const stat = windowStats(priceHistory, config.strategy.volatilityLookbackMs);
+    if (stat.count === 0) return config.strategy.targetGainPercent;
+    return computeAdaptiveTargetPercent(
+      stat.medianAbsPercent,
+      config.strategy.adaptiveTargetMultiplier,
+      config.strategy.adaptiveTargetMinPercent,
+      config.strategy.adaptiveTargetMaxPercent,
+    );
   }
 
   // --- buy/sell execution, shared by the automatic loop and manual commands
@@ -351,19 +387,27 @@ async function main() {
       s.paperTokenBalance += fill.outputAmountUi;
     }
 
+    const targetGainPercent = computeCurrentTargetGainPercent();
     const fillPriceUsd = (solIn * solUsd) / fill.outputAmountUi;
-    s.flip = afterBuy(s.flip, fillPriceUsd, fill.outputAmountUi, {
-      buyLegPercent: buyImpact,
-      buyNetworkFeeLamports: buy.networkFeeLamports,
-      costUsd: usdAmount,
-    });
+    s.flip = afterBuy(
+      s.flip,
+      fillPriceUsd,
+      fill.outputAmountUi,
+      {
+        buyLegPercent: buyImpact,
+        buyNetworkFeeLamports: buy.networkFeeLamports,
+        costUsd: usdAmount,
+      },
+      targetGainPercent,
+    );
     saveState(config, s);
 
     const msg = `BUY ${fill.outputAmountUi.toFixed(4)} ${config.token.symbol} @ ${fillPriceUsd.toFixed(8)} (~$${usdAmount.toFixed(2)})`;
     setEvent(msg);
     log.info(msg, {
       estimatedRoundTripCostPercent: round2(cost.totalPercent),
-      targetSellPrice: round8(sellTargetPrice(fillPriceUsd, config.strategy.targetGainPercent)),
+      targetGainPercent: round2(targetGainPercent),
+      targetSellPrice: round8(sellTargetPrice(fillPriceUsd, targetGainPercent)),
       tag: opts.tag,
       tx: fill.txSignature,
     });
@@ -503,7 +547,14 @@ async function main() {
       .getPrice()
       .then((solUsd) => {
         s = {
-          flip: { ...s.flip, phase: "AWAITING_BUY", buyPrice: null, tokenAmount: null, entryCost: null },
+          flip: {
+            ...s.flip,
+            phase: "AWAITING_BUY",
+            buyPrice: null,
+            tokenAmount: null,
+            entryCost: null,
+            targetGainPercent: null,
+          },
           paperSolBalance: config.paper.startingBalanceUsd / solUsd,
           paperTokenBalance: 0,
           realizedPnlUsd: 0,
@@ -521,6 +572,7 @@ async function main() {
 
   function buildSnapshot(): DashboardState {
     const flip = s.flip;
+    const activeTargetGainPercent = flip.targetGainPercent ?? config.strategy.targetGainPercent;
     const position =
       flip.phase === "AWAITING_SELL" && flip.buyPrice !== null && flip.entryCost !== null
         ? {
@@ -537,7 +589,8 @@ async function main() {
                 ? flip.tokenAmount * (latestPriceUsd - flip.buyPrice)
                 : undefined,
             netIfSoldNowPercent: latestNetIfSoldNowPercent,
-            sellTargetUsd: sellTargetPrice(flip.buyPrice, config.strategy.targetGainPercent),
+            sellTargetUsd: sellTargetPrice(flip.buyPrice, activeTargetGainPercent),
+            targetGainPercent: activeTargetGainPercent,
             stopLossPriceUsd:
               config.strategy.stopLossPercent > 0
                 ? flip.buyPrice * (1 - config.strategy.stopLossPercent / 100)
@@ -571,6 +624,9 @@ async function main() {
       maxSpreadPercent: config.strategy.maxSpreadPercent,
       minNetProfitPercent: config.strategy.minNetProfitPercent,
       maxRoundTripCostPercent: config.strategy.maxRoundTripCostPercent,
+      adaptiveTargetEnabled: config.strategy.adaptiveTargetEnabled,
+      nextTargetGainPercent: flip.phase === "AWAITING_BUY" ? computeCurrentTargetGainPercent() : undefined,
+      staticTargetGainPercent: config.strategy.targetGainPercent,
       tradeSizePercent: config.trade.sizePercent,
       nextBuyUsdEstimate:
         flip.phase === "AWAITING_BUY" && latestSolUsd !== undefined

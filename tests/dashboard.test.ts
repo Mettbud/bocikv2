@@ -20,6 +20,9 @@ const base: DashboardState = {
   maxSpreadPercent: 1,
   minNetProfitPercent: 2,
   maxRoundTripCostPercent: 4,
+  adaptiveTargetEnabled: false,
+  nextTargetGainPercent: undefined,
+  staticTargetGainPercent: 6,
   tradeSizePercent: 50,
   nextBuyUsdEstimate: undefined,
   lastEvent: undefined,
@@ -52,11 +55,12 @@ describe("formatDashboard", () => {
         unrealizedUsd: 1.5,
         netIfSoldNowPercent: 3.2,
         sellTargetUsd: 0.0265,
+        targetGainPercent: 6,
         stopLossPriceUsd: 0.01875,
       },
     });
     expect(out).toContain("Position:       1,000 CYBERLEEK");
-    expect(out).toContain("Sell target:    $0.02650000");
+    expect(out).toContain("Sell target:    $0.02650000 (cel +6.00%, ustalony przy zakupie)");
     expect(out).toContain("Net if sold now:");
     expect(out).toContain("Stop loss:      $0.01875000");
   });
@@ -69,5 +73,17 @@ describe("formatDashboard", () => {
   it("shows the pool spread against its configured max", () => {
     const out = formatDashboard({ ...base, spreadPercent: 0.24, maxSpreadPercent: 1 });
     expect(out).toContain("Spread: 0.24% (max 1%)");
+  });
+
+  it("shows the adaptive target when enabled", () => {
+    const out = formatDashboard({ ...base, adaptiveTargetEnabled: true, nextTargetGainPercent: 4.8 });
+    expect(out).toContain("Next target:");
+    expect(out).toContain("+4.80%");
+  });
+
+  it("shows the static target when adaptive targeting is off", () => {
+    const out = formatDashboard({ ...base, adaptiveTargetEnabled: false, staticTargetGainPercent: 6 });
+    expect(out).toContain("stały");
+    expect(out).toContain("+6.00%");
   });
 });

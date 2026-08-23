@@ -14,6 +14,8 @@ export interface PositionSnapshot {
   /** What net profit % selling right now would clear, after live-estimated round-trip costs. */
   netIfSoldNowPercent: number | undefined;
   sellTargetUsd: number;
+  /** The gain % actually used for this position's target - frozen at buy time. */
+  targetGainPercent: number;
   stopLossPriceUsd: number | undefined;
 }
 
@@ -38,6 +40,11 @@ export interface DashboardState {
   maxSpreadPercent: number;
   minNetProfitPercent: number;
   maxRoundTripCostPercent: number;
+  adaptiveTargetEnabled: boolean;
+  /** What the adaptive target would set the NEXT buy's sell target to, right now. */
+  nextTargetGainPercent: number | undefined;
+  /** The fixed TARGET_GAIN_PERCENT - shown when adaptive targeting is off. */
+  staticTargetGainPercent: number;
   /** Next automatic buy size, as % of the spendable balance. */
   tradeSizePercent: number;
   nextBuyUsdEstimate: number | undefined;
@@ -61,7 +68,7 @@ export function formatDashboard(s: DashboardState): string {
     lines.push(
       `Unrealized:     ${colorize(pct(p.unrealizedPercent), signColor(p.unrealizedPercent))} (${colorize(usd(p.unrealizedUsd, 2), signColor(p.unrealizedUsd))})`,
     );
-    lines.push(`Sell target:    ${usd(p.sellTargetUsd, 8)}`);
+    lines.push(`Sell target:    ${usd(p.sellTargetUsd, 8)} (cel +${p.targetGainPercent.toFixed(2)}%, ustalony przy zakupie)`);
     const netLabel =
       p.netIfSoldNowPercent === undefined
         ? "-"
@@ -79,6 +86,12 @@ export function formatDashboard(s: DashboardState): string {
     }
     if (s.nextBuyUsdEstimate !== undefined) {
       lines.push(`Next buy size:  ${s.tradeSizePercent}% of balance (~${usd(s.nextBuyUsdEstimate, 2)})`);
+    }
+    if (s.adaptiveTargetEnabled) {
+      const targetLabel = s.nextTargetGainPercent !== undefined ? `+${s.nextTargetGainPercent.toFixed(2)}%` : "-";
+      lines.push(`Next target:    ${colorize("adaptive", colors.GREEN)}, aktualnie liczyłby ${targetLabel}`);
+    } else {
+      lines.push(`Next target:    ${colorize("stały", colors.DIM)} +${s.staticTargetGainPercent.toFixed(2)}%`);
     }
   }
 

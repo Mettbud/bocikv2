@@ -6,6 +6,7 @@ import { loadConfig, type BotConfig } from "../src/config.js";
 import { JupiterClient } from "../src/jupiter.js";
 import { getConnection, getMintDecimals, SolPriceTracker } from "../src/chain.js";
 import { fetchDexScreenerSnapshot } from "../src/dexscreener.js";
+import { volatilityPerSqrtSecond, windowStats, type PriceSample } from "../src/volatility.js";
 
 /**
  * Standalone market-analysis tool - answers the actual question before you
@@ -27,10 +28,7 @@ import { fetchDexScreenerSnapshot } from "../src/dexscreener.js";
  *   ANALYZE_DURATION_MINUTES=60 npm run analyze   # longer live sample
  */
 
-interface Sample {
-  tMs: number;
-  priceUsd: number;
-}
+type Sample = PriceSample;
 
 const DURATION_MINUTES = Number(process.env.ANALYZE_DURATION_MINUTES ?? 15);
 
@@ -137,66 +135,6 @@ async function main() {
   report(samples, config);
 }
 
-interface WindowStat {
-  label: string;
-  count: number;
-  meanAbsPercent: number;
-  medianAbsPercent: number;
-  maxUpPercent: number;
-  maxDownPercent: number;
-}
-
-/** For each sample, compares it to the nearest earlier sample at least
- *  `windowMs` back, and collects the % change over that gap. */
-export function windowStats(samples: Sample[], windowMs: number, label: string): WindowStat {
-  const changes: number[] = [];
-  let maxUp = 0;
-  let maxDown = 0;
-  let j = 0;
-  for (let i = 0; i < samples.length; i++) {
-    const cur = samples[i];
-    if (!cur) continue;
-    while (j < i) {
-      const candidate = samples[j];
-      if (!candidate || cur.tMs - candidate.tMs <= windowMs) break;
-      j++;
-    }
-    const earliest = samples[j];
-    if (!earliest) continue;
-    const gapMs = cur.tMs - earliest.tMs;
-    if (gapMs < windowMs * 0.5) continue; // not enough lookback yet for this window
-    const change = ((cur.priceUsd - earliest.priceUsd) / earliest.priceUsd) * 100;
-    changes.push(change);
-    if (change > maxUp) maxUp = change;
-    if (change < maxDown) maxDown = change;
-  }
-  const abs = changes.map(Math.abs).sort((a, b) => a - b);
-  const mean = abs.length ? abs.reduce((sum, v) => sum + v, 0) / abs.length : 0;
-  const median = abs.length ? (abs[Math.floor(abs.length / 2)] ?? 0) : 0;
-  return { label, count: changes.length, meanAbsPercent: mean, medianAbsPercent: median, maxUpPercent: maxUp, maxDownPercent: maxDown };
-}
-
-/** Per-sqrt-second volatility from log returns - the standard random-walk estimator. */
-export function volatilityPerSqrtSecond(samples: Sample[]): number {
-  const normalized: number[] = [];
-  for (let i = 1; i < samples.length; i++) {
-    const prev = samples[i - 1];
-    const cur = samples[i];
-    if (!prev || !cur) continue;
-    const dtSec = (cur.tMs - prev.tMs) / 1000;
-    if (dtSec <= 0) continue;
-    normalized.push(Math.log(cur.priceUsd / prev.priceUsd) / Math.sqrt(dtSec));
-  }
-  return stdev(normalized);
-}
-
-function stdev(values: number[]): number {
-  if (values.length < 2) return 0;
-  const mean = values.reduce((sum, v) => sum + v, 0) / values.length;
-  const variance = values.reduce((sum, v) => sum + (v - mean) ** 2, 0) / (values.length - 1);
-  return Math.sqrt(variance);
-}
-
 function report(samples: Sample[], config: BotConfig): void {
   if (samples.length < 5) {
     console.log("Za mało próbek do sensownej analizy - zbierz dane dłużej (ANALYZE_DURATION_MINUTES).");
@@ -214,7 +152,7 @@ function report(samples: Sample[], config: BotConfig): void {
   console.log("Ile realnie porusza się cena, w zależności od okna czasu:\n");
   console.log("okno   | próbek | śr. ruch | mediana | max w górę | max w dół");
   for (const w of windows) {
-    const stat = windowStats(samples, w.ms, w.label);
+    const stat = windowStats(samples, w.ms);
     console.log(
       `${w.label.padEnd(6)} | ${String(stat.count).padStart(6)} | ${pctStr(stat.meanAbsPercent).padStart(8)} | ${pctStr(stat.medianAbsPercent).padStart(7)} | ${("+" + stat.maxUpPercent.toFixed(2) + "%").padStart(10)} | ${(stat.maxDownPercent.toFixed(2) + "%").padStart(9)}`,
     );

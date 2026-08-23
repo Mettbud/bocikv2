@@ -39,8 +39,23 @@ const envSchema = z.object({
   MIN_SOL_RESERVE: numeric(0.05),
 
   // --- The flip strategy -----------------------------------------------
-  // Gross markup we aim to sell at, measured from our buy price.
+  // Gross markup we aim to sell at, measured from our buy price. Used as-is
+  // when ADAPTIVE_TARGET_ENABLED=false, and as the fallback while there
+  // isn't yet enough live price history to compute an adaptive one.
   TARGET_GAIN_PERCENT: numeric(6),
+  // When enabled, every new buy sets its OWN sell target from how much the
+  // token has actually been moving recently (VOLATILITY_LOOKBACK_MS of
+  // in-memory price history), instead of the fixed TARGET_GAIN_PERCENT
+  // above. The target is frozen at buy time and never changes while the
+  // position is open - only the next buy recomputes it.
+  ADAPTIVE_TARGET_ENABLED: boolFlag(true),
+  VOLATILITY_LOOKBACK_MS: numeric(300_000),
+  // Target = (typical recent move over the lookback window) * this multiplier.
+  ADAPTIVE_TARGET_MULTIPLIER: numeric(1.5),
+  // Hard floor/ceiling on the adaptive target - independent of the live
+  // round-trip cost check that still runs before every actual sell.
+  ADAPTIVE_TARGET_MIN_PERCENT: numeric(3),
+  ADAPTIVE_TARGET_MAX_PERCENT: numeric(15),
   // After subtracting the *live-estimated* round-trip cost (spread + price
   // impact + network/priority fees on both legs) from the gross move, the
   // trade only fires if what's left is still at least this much.
@@ -109,6 +124,11 @@ function buildConfig(env: z.infer<typeof envSchema>) {
       maxRoundTripCostPercent: env.MAX_ROUND_TRIP_COST_PERCENT,
       maxSpreadPercent: env.MAX_SPREAD_BPS / 100,
       stopLossPercent: env.STOP_LOSS_PERCENT,
+      adaptiveTargetEnabled: env.ADAPTIVE_TARGET_ENABLED,
+      volatilityLookbackMs: env.VOLATILITY_LOOKBACK_MS,
+      adaptiveTargetMultiplier: env.ADAPTIVE_TARGET_MULTIPLIER,
+      adaptiveTargetMinPercent: env.ADAPTIVE_TARGET_MIN_PERCENT,
+      adaptiveTargetMaxPercent: env.ADAPTIVE_TARGET_MAX_PERCENT,
     },
     execution: {
       maxSlippageBps: env.MAX_SLIPPAGE_BPS,

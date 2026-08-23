@@ -83,16 +83,48 @@ wyjść:
     ostatniej sprzedaży (`REBUY_DROP_PERCENT` dodaje dodatkowy margines).
 - Zanim bot faktycznie kupi, sprawdza **żywy koszt rundy** - jeśli jest za
   wysoki (`MAX_ROUND_TRIP_COST_PERCENT`), pomija ten tick i czeka dalej.
-- **AWAITING_SELL** - czekamy, aż cena osiągnie `buyPrice * (1 +
-  TARGET_GAIN_PERCENT%)`. Wtedy bot pobiera świeżą wycenę sprzedaży,
-  liczy realny koszt rundy (noga kupna zapisana przy wejściu + noga
-  sprzedaży na żywo) i sprzedaje tylko jeśli zostanie co najmniej
+- **AWAITING_SELL** - czekamy, aż cena osiągnie `buyPrice * (1 + cel%)`
+  (patrz niżej, skąd bierze się "cel"). Wtedy bot pobiera świeżą wycenę
+  sprzedaży, liczy realny koszt rundy (noga kupna zapisana przy wejściu +
+  noga sprzedaży na żywo) i sprzedaje tylko jeśli zostanie co najmniej
   `MIN_NET_PROFIT_PERCENT` netto. Jeśli nie - trzyma dalej i sprawdza
   ponownie przy następnym ticku.
 - **STOP_LOSS_PERCENT** - niezależna siatka bezpieczeństwa (nie część
   strategii "kup nisko/sprzedaj wysoko"), która wymusza wyjście, gdyby cena
   poszła mocno w dół i "sprzedaj wysoko" nigdy by nie nadeszło. Ustaw na 0,
   żeby wyłączyć.
+
+### Adaptacyjny cel: bot sam dostosowuje % do tego, jak rynek się zachowuje
+
+Domyślnie (`ADAPTIVE_TARGET_ENABLED=true`) cel sprzedaży **nie jest** sztywnym
+`TARGET_GAIN_PERCENT` z `.env` - bot trzyma w pamięci ostatnie
+`VOLATILITY_LOOKBACK_MS` (domyślnie 5 min) cen (dokładnie to, co mierzy
+`npm run analyze`, tylko ciągle, na żywo) i przy **każdym nowym kupnie**
+liczy:
+
+```
+cel = typowy ostatni ruch (mediana z 5 min) × ADAPTIVE_TARGET_MULTIPLIER
+      przycięty do [ADAPTIVE_TARGET_MIN_PERCENT, ADAPTIVE_TARGET_MAX_PERCENT]
+```
+
+Spokojny token dostaje mniejszy, szybszy do osiągnięcia cel; token, który
+akurat oszalał, dostaje większy - żeby nie sprzedawać w zwykły szum. Cel
+**zamraża się w momencie zakupu** i nie zmienia się, dopóki pozycja jest
+otwarta (inaczej gonilibyśmy przesuwającą się linię mety) - dopiero
+następne kupno liczy własny, świeży cel.
+
+Dwa niezależne bezpieczniki działają zawsze, bez względu na to co policzy
+adaptacyjny cel:
+- `ADAPTIVE_TARGET_MIN_PERCENT`/`MAX_PERCENT` - twardy dół/góra na sam cel,
+- `MIN_NET_PROFIT_PERCENT`/`MAX_ROUND_TRIP_COST_PERCENT`/`MAX_SPREAD_BPS` -
+  realny koszt liczony na żywo przy każdej faktycznej transakcji, całkiem
+  niezależnie od tego, jaki cel akurat obowiązuje.
+
+Dashboard pokazuje na bieżąco, jaki cel obowiązuje otwartą pozycję
+(`Sell target: ... cel +X%, ustalony przy zakupie`), a przy braku pozycji -
+jaki cel policzyłby następny zakup już teraz (`Next target: adaptive,
+aktualnie liczyłby +X%`). Wyłącz `ADAPTIVE_TARGET_ENABLED=false`, żeby
+wrócić do sztywnego `TARGET_GAIN_PERCENT`.
 
 ## Analiza rynku: ile CYBERLEEK faktycznie się rusza
 
@@ -158,6 +190,7 @@ src/
   ledger.ts      - trwały stan (data/state.json) + log transakcji (data/trades.csv)
   wallet.ts       - wczytanie klucza portfela (tylko tryb live)
   sizing.ts       - wielkość automatycznego kupna jako % salda
+  volatility.ts   - zmienność/adaptacyjny cel, współdzielone z scripts/analyzeVolatility.ts
   dexscreener.ts  - historyczna zmiana ceny (5m/1h/6h/24h) dla scripts/analyzeVolatility.ts
   cli/
     format.ts     - kolory/formatowanie liczb w terminalu
@@ -168,7 +201,7 @@ scripts/
   analyzeVolatility.ts - narzędzie do pomiaru realnej zmienności tokena
 tests/
   strategy.test.ts, costModel.test.ts, dashboard.test.ts, sizing.test.ts,
-  analyzeVolatility.test.ts - testy jednostkowe
+  volatility.test.ts, dexscreener.test.ts - testy jednostkowe
 ```
 
 ## Uruchomienie

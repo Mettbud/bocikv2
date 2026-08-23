@@ -30,6 +30,13 @@ export interface FlipState {
   tokenAmount: number | null;
   /** Buy-leg cost info, carried forward so a sell can compute the true round-trip cost. */
   entryCost: EntryCost | null;
+  /**
+   * The gross target % this specific position sells at - fixed at buy time
+   * (static TARGET_GAIN_PERCENT, or a freshly-computed adaptive value) and
+   * never changed while the position is open, so we're not chasing a
+   * moving goalpost mid-trade. The next buy computes its own.
+   */
+  targetGainPercent: number | null;
   completedFlips: number;
 }
 
@@ -40,6 +47,7 @@ export function initialFlipState(): FlipState {
     lastSellPrice: null,
     tokenAmount: null,
     entryCost: null,
+    targetGainPercent: null,
     completedFlips: 0,
   };
 }
@@ -102,6 +110,7 @@ export function afterBuy(
   fillPrice: number,
   tokenAmount: number,
   entryCost: EntryCost,
+  targetGainPercent: number,
 ): FlipState {
   return {
     ...state,
@@ -109,6 +118,7 @@ export function afterBuy(
     buyPrice: fillPrice,
     tokenAmount,
     entryCost,
+    targetGainPercent,
   };
 }
 
@@ -119,6 +129,7 @@ export function afterSell(state: FlipState, fillPrice: number): FlipState {
     buyPrice: null,
     tokenAmount: null,
     entryCost: null,
+    targetGainPercent: null,
     lastSellPrice: fillPrice,
     completedFlips: state.completedFlips + 1,
   };
