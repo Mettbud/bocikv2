@@ -1,0 +1,30 @@
+{
+  "name": "bocik-flip-bot",
+  "version": "0.1.0",
+  "description": "Simplified Solana flip-trading bot: buy low, sell high, rebuy on the dip - only when the move clears real round-trip costs (spread, price impact, network fees).",
+  "type": "module",
+  "private": true,
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "bot": "tsx src/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@solana/spl-token": "^0.4.9",
+    "@solana/web3.js": "^1.98.4",
+    "bs58": "^6.0.0",
+    "dotenv": "^16.4.5",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  }
+}
