@@ -50,10 +50,10 @@ Dlatego domyślne ustawienia to:
 
 Im większa transakcja, tym mniejszy % zjadają opłaty sieciowe - przy $200+
 nawet 3-4% celu brutto już ma sens. Przy $20-30 lepiej trzymać się 6%+, bo
-stałe opłaty sieciowe to relatywnie duży kawałek. Automatyczne kupno nie ma
-stałej kwoty w dolarach - to `TRADE_SIZE_PERCENT` (domyślnie 50%) aktualnego
-salda ponad `MIN_SOL_RESERVE`, więc wielkość transakcji rośnie/maleje razem z
-kontem w miarę zysków/strat.
+stałe opłaty sieciowe to relatywnie duży kawałek. Żaden slot nie ma stałej
+kwoty w dolarach - to `SLOT_A_SIZE_PERCENT`/`SLOT_B_SIZE_PERCENT` (domyślnie
+30%+30%) aktualnego salda ponad `MIN_SOL_RESERVE`, więc wielkość transakcji
+rośnie/maleje razem z kontem w miarę zysków/strat.
 
 Te liczby to punkt startowy, nie wyrocznia - realny spread zależy od
 płynności konkretnej puli w danym momencie, dlatego bot i tak liczy to na
@@ -126,6 +126,37 @@ jaki cel policzyłby następny zakup już teraz (`Next target: adaptive,
 aktualnie liczyłby +X%`). Wyłącz `ADAPTIVE_TARGET_ENABLED=false`, żeby
 wrócić do sztywnego `TARGET_GAIN_PERCENT`.
 
+## Dwa sloty: Slot A + Slot B jako "dobicie"
+
+Bot prowadzi **dwie niezależne pozycje jednocześnie**, każda po
+`SLOT_A_SIZE_PERCENT`/`SLOT_B_SIZE_PERCENT` portfela (domyślnie 30%+30%):
+
+- **Slot A** działa dokładnie jak opisano wyżej - samodzielnie kupuje,
+  sprzedaje, odkupuje na spadku. Główna, "zwykła" pozycja.
+- **Slot B** NIGDY nie kupuje z własnej inicjatywy. Kupuje wyłącznie jako
+  "dobicie", gdy **Slot A jest akurat otwarty i na stracie** większej niż
+  adaptacyjnie wyliczony próg:
+
+  ```
+  próg = typowy ostatni ruch (mediana z VOLATILITY_LOOKBACK_MS) × DUAL_TRIGGER_MULTIPLIER
+         przycięty do [DUAL_TRIGGER_MIN_PERCENT, DUAL_TRIGGER_MAX_PERCENT]
+  ```
+
+  Ta sama matematyka co adaptacyjny cel sprzedaży, tylko osobne mnożnik/
+  limity. Po zakupie Slot B ma **własny, niezależny cel sprzedaży**
+  (liczony tak samo jak dla Slotu A) i sprzedaje samodzielnie, gdy go
+  osiągnie - nie czeka na Slot A. Po sprzedaży wraca do obserwowania Slotu
+  A i czeka na kolejną okazję do dobicia.
+
+Domyślnie `DUAL_TRIGGER_MAX_PERCENT=20` jest **poniżej**
+`STOP_LOSS_PERCENT=25` - to celowe: Slot B ma szansę zareagować, zanim
+Slot A dostanie stop-lossa. Ustaw `DUAL_SLOT_ENABLED=false`, żeby Slot B
+nigdy nie kupował - bot zachowuje się wtedy jak wersja jednosolotowa.
+
+Dashboard pokazuje oba sloty osobno, a Slot B dodatkowo linię w stylu
+`Czeka aż Slot A będzie na -8.00% (teraz: -5.20%)`, gdy Slot A jest otwarty
+ale jeszcze nie na tyle nisko.
+
 ## Analiza rynku: ile CYBERLEEK faktycznie się rusza
 
 Zanim ustawisz `TARGET_GAIN_PERCENT` na wyczucie, zmierz to:
@@ -160,21 +191,26 @@ walk), ale dużo lepszy punkt startowy niż zgadywanie.
 ## Dashboard i komendy
 
 Zamiast przewijanych logów, `npm run bot` odświeża w terminalu jeden ekran
-stanu (co `DASHBOARD_REFRESH_MS`, domyślnie 1s): aktualną cenę, pozycję (jeśli
-otwarta) z live PnL i tym, ile zostałoby netto gdyby sprzedać teraz, cel
-sprzedaży, próg odkupu, zrealizowany PnL, salda i aktualny szacowany koszt
-rundy. Pełny log zdarzeń nadal leci do `data/bot.log`.
+stanu (co `DASHBOARD_REFRESH_MS`, domyślnie 1s): aktualną cenę, blok Slotu A
+i blok Slotu B - każdy z pozycją (jeśli otwarta), live PnL, tym ile zostałoby
+netto gdyby sprzedać teraz, celem sprzedaży - plus zrealizowany PnL (oba
+sloty razem), salda i spread puli. Pełny log zdarzeń nadal leci do
+`data/bot.log`.
 
-W tym samym terminalu działają komendy (wpisz i Enter):
+W tym samym terminalu działają komendy (wpisz i Enter). Domyślny slot to
+`a`, gdy pominięty:
 
 ```
-buy <usd>       - kup ręcznie za tyle USD (pomija sygnał strategii, ale nie limity bezpieczeństwa)
-sell [percent]  - sprzedaj tyle % pozycji (domyślnie 100%), pomija wymóg minimalnego zysku netto
-panic           - natychmiastowe wyjście z całej pozycji
-reset           - (tylko paper) zeruje saldo i pozycję do stanu startowego
-status          - wymusza odświeżenie (dashboard i tak odświeża się sam)
-quit / exit     - zamyka bota, zapisując stan
+buy <usd> [a|b]       - kup ręcznie za tyle USD w danym slocie (pomija sygnał strategii, ale nie limity bezpieczeństwa)
+sell [percent] [a|b]  - sprzedaj tyle % pozycji w danym slocie (domyślnie 100%), pomija wymóg minimalnego zysku netto
+panic [a|b]           - natychmiastowe wyjście z pozycji; bez argumentu wychodzi z OBU slotów
+reset                 - (tylko paper) zeruje saldo i oba sloty do stanu startowego
+status                - wymusza odświeżenie (dashboard i tak odświeża się sam)
+quit / exit           - zamyka bota, zapisując stan
 ```
+
+Przykłady: `buy 50 b` (kup za $50 w Slocie B), `sell 50` (sprzedaj 50%
+Slotu A), `sell b` (sprzedaj całość Slotu B), `panic` (wyjdź ze wszystkiego).
 
 ## Struktura kodu
 
@@ -225,11 +261,14 @@ wiarygodnym oszacowaniem tego, co dałaby prawdziwa transakcja - bez ryzykowania
 2. Utwórz **dedykowany** hot-wallet (nigdy głównego portfela) i wklej jego
    klucz prywatny (base58 albo tablica JSON z `solana-keygen`) do
    `WALLET_PRIVATE_KEY`.
-3. Zasil portfel odpowiednią ilością SOL - bot wyda `TRADE_SIZE_PERCENT`%
-   salda ponad `MIN_SOL_RESERVE` (bufor na opłaty sieciowe, nigdy nie zejdzie
+3. Zasil portfel odpowiednią ilością SOL - w najgorszym razie oba sloty
+   otwarte naraz to `SLOT_A_SIZE_PERCENT + SLOT_B_SIZE_PERCENT`% salda
+   ponad `MIN_SOL_RESERVE` (bufor na opłaty sieciowe, nigdy nie zejdzie
    poniżej tego minimum).
-4. Zacznij od małego `TRADE_SIZE_PERCENT` (np. 10-20%) i obserwuj `data/bot.log` oraz
-   `data/trades.csv` przez kilka pełnych cykli, zanim zwiększysz stawkę.
+4. Zacznij od małych `SLOT_A_SIZE_PERCENT`/`SLOT_B_SIZE_PERCENT` (np. 10%)
+   i obserwuj `data/bot.log` oraz `data/trades.csv` przez kilka pełnych
+   cykli, zanim zwiększysz stawkę. Rozważ też start z `DUAL_SLOT_ENABLED=false`,
+   żeby najpierw zobaczyć jak radzi sobie sam Slot A.
 
 ## Świadome uproszczenia względem `botrade`
 

@@ -1,8 +1,15 @@
 /**
  * The whole strategy, in one sentence: buy low, sell high, and once we've
  * sold, wait for price to fall back below where we sold before buying
- * again. Two states, one flip at a time - no averaging in, no pyramiding,
- * no cascading partial exits.
+ * again. No averaging within a single position, no cascading partial
+ * exits - each slot holds one position at a time.
+ *
+ * The bot runs TWO independent slots of this exact state machine (Slot A,
+ * Slot B - see index.ts), each with its own buy/sell price, target, and
+ * cost basis. Slot A follows the rule above on its own. Slot B never
+ * decides to buy by itself - it only ever "reinforces" while Slot A is
+ * open and underwater (see `isReinforcementBuySignal`), then sells
+ * independently at its own target like any other position.
  *
  * All functions here are pure (no I/O, no clock reads beyond the price
  * passed in) so the state machine is fully unit-testable independent of
@@ -93,6 +100,23 @@ export function isSellSignal(
 
 export function grossMovePercent(buyPrice: number, currentPrice: number): number {
   return ((currentPrice - buyPrice) / buyPrice) * 100;
+}
+
+/**
+ * Slot B's only entry condition: Slot A must currently hold a position
+ * that's underwater by at least `triggerDropPercent`, and Slot B itself
+ * must be flat. Slot B never rebuys on its own schedule - every buy it
+ * ever makes is a reaction to Slot A being in a drawdown.
+ */
+export function isReinforcementBuySignal(
+  slotA: FlipState,
+  slotB: FlipState,
+  currentPrice: number,
+  triggerDropPercent: number,
+): boolean {
+  if (slotB.phase !== "AWAITING_BUY") return false;
+  if (slotA.phase !== "AWAITING_SELL" || slotA.buyPrice === null) return false;
+  return grossMovePercent(slotA.buyPrice, currentPrice) <= -triggerDropPercent;
 }
 
 /** Optional safety net, independent of the flip logic - not the profit strategy. */

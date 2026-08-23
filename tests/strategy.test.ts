@@ -5,6 +5,7 @@ import {
   grossMovePercent,
   initialFlipState,
   isBuySignal,
+  isReinforcementBuySignal,
   isSellSignal,
   isStopLossTriggered,
   rebuyTriggerPrice,
@@ -85,5 +86,32 @@ describe("flip strategy state machine", () => {
     expect(state.entryCost).toBeNull();
     expect(state.targetGainPercent).toBeNull();
     expect(state.lastSellPrice).toBe(1.06);
+  });
+});
+
+describe("Slot B reinforcement trigger", () => {
+  const openSlotA = afterBuy(initialFlipState(), 1.0, 100, {
+    buyLegPercent: 0.3,
+    buyNetworkFeeLamports: 10_000,
+    costUsd: 30,
+  }, 6);
+
+  it("does not trigger while Slot A is flat", () => {
+    expect(isReinforcementBuySignal(initialFlipState(), initialFlipState(), 0.9, 8)).toBe(false);
+  });
+
+  it("does not trigger until Slot A's drawdown reaches the threshold", () => {
+    expect(isReinforcementBuySignal(openSlotA, initialFlipState(), 0.95, 8)).toBe(false); // -5%, below 8% trigger
+    expect(isReinforcementBuySignal(openSlotA, initialFlipState(), 0.91, 8)).toBe(true); // -9%, past trigger
+    expect(isReinforcementBuySignal(openSlotA, initialFlipState(), 0.85, 8)).toBe(true); // -15%, well past trigger
+  });
+
+  it("does not trigger if Slot B already holds a position", () => {
+    const openSlotB = afterBuy(initialFlipState(), 0.9, 50, {
+      buyLegPercent: 0.3,
+      buyNetworkFeeLamports: 10_000,
+      costUsd: 30,
+    }, 6);
+    expect(isReinforcementBuySignal(openSlotA, openSlotB, 0.8, 8)).toBe(false);
   });
 });

@@ -1,16 +1,18 @@
 import { createInterface } from "node:readline";
 import type { Logger } from "../logger.js";
 
+export type SlotKey = "A" | "B";
+
 export interface CommandDeps {
   logger: Logger;
   mode: "paper" | "live";
   /** Manual buy, bypassing the strategy's buy signal (still respects safety limits). */
-  manualBuy: (usdAmount: number) => Promise<void>;
-  /** Manual sell of `percent`% of the current position, bypassing the profit gate. */
-  manualSell: (percent: number) => Promise<void>;
-  /** Sells the whole position immediately, no questions asked. */
-  panic: () => Promise<void>;
-  /** Paper mode only: wipes the position and balances back to a fresh start. */
+  manualBuy: (usdAmount: number, slot: SlotKey) => Promise<void>;
+  /** Manual sell of `percent`% of the given slot's position, bypassing the profit gate. */
+  manualSell: (percent: number, slot: SlotKey) => Promise<void>;
+  /** Sells a slot's whole position immediately, no questions asked. Omit slot to panic both. */
+  panic: (slot: SlotKey | undefined) => Promise<void>;
+  /** Paper mode only: wipes both slots and balances back to a fresh start. */
   reset: () => void;
   onExit: () => void;
 }
@@ -25,30 +27,53 @@ export function startCommandLoop(deps: CommandDeps): void {
   });
 }
 
+function parseSlot(token: string | undefined): SlotKey | undefined {
+  if (token === undefined) return undefined;
+  const lower = token.toLowerCase();
+  if (lower === "a") return "A";
+  if (lower === "b") return "B";
+  return undefined;
+}
+
 export async function handleLine(line: string, deps: CommandDeps): Promise<void> {
-  const [cmd, arg] = line.split(/\s+/);
+  const [cmd, ...rest] = line.split(/\s+/);
 
   switch (cmd?.toLowerCase()) {
     case "buy": {
-      const usdAmount = Number(arg ?? "0");
+      const usdAmount = Number(rest[0] ?? "0");
+      const slot = parseSlot(rest[1]) ?? "A";
       if (!Number.isFinite(usdAmount) || usdAmount <= 0) {
-        console.log('usage: buy <usd amount>, e.g. "buy 50"');
+        console.log('usage: buy <usd amount> [a|b], e.g. "buy 50" or "buy 50 b"');
         return;
       }
-      await deps.manualBuy(usdAmount);
+      await deps.manualBuy(usdAmount, slot);
       return;
     }
     case "sell": {
-      const percent = arg === undefined ? 100 : Number(arg);
-      if (!Number.isFinite(percent) || percent <= 0 || percent > 100) {
-        console.log('usage: sell [percent], e.g. "sell 50" or just "sell" for 100%');
+      // "sell", "sell 50", "sell b", "sell 50 b" - a token is either the
+      // slot letter or the percent, in either order.
+      let percent: number | undefined;
+      let slot: SlotKey | undefined;
+      for (const token of rest) {
+        const asSlot = parseSlot(token);
+        if (asSlot) {
+          slot = asSlot;
+          continue;
+        }
+        const asNumber = Number(token);
+        if (Number.isFinite(asNumber)) percent = asNumber;
+      }
+      percent ??= 100;
+      slot ??= "A";
+      if (percent <= 0 || percent > 100) {
+        console.log('usage: sell [percent] [a|b], e.g. "sell 50" or "sell b" or "sell 50 b"');
         return;
       }
-      await deps.manualSell(percent);
+      await deps.manualSell(percent, slot);
       return;
     }
     case "panic":
-      await deps.panic();
+      await deps.panic(parseSlot(rest[0]));
       return;
     case "reset":
       if (deps.mode === "live") {
@@ -60,7 +85,7 @@ export async function handleLine(line: string, deps: CommandDeps): Promise<void>
     case "status":
       return; // dashboard redraws on its own timer
     case "help":
-      console.log("commands: buy <usd>  sell [percent]  panic  reset  status  quit");
+      console.log("commands: buy <usd> [a|b]  sell [percent] [a|b]  panic [a|b]  reset  status  quit");
       return;
     case "quit":
     case "exit":

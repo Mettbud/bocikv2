@@ -30,12 +30,27 @@ const envSchema = z.object({
   TRADING_MODE: z.enum(["paper", "live"]).default("paper"),
   PAPER_BALANCE_USD: numeric(1000),
 
-  // Every automatic buy spends this % of the currently spendable balance
-  // (SOL balance minus MIN_SOL_RESERVE) - not a fixed dollar figure. As
-  // realized PnL compounds the balance up or down, the position size
-  // compounds with it. "buy <usd>" from the console still lets you force
-  // an exact dollar amount for a one-off manual trade.
-  TRADE_SIZE_PERCENT: numeric(50),
+  // Two independent slots, each sized as a % of the currently spendable
+  // balance (SOL balance minus MIN_SOL_RESERVE) - not a fixed dollar
+  // figure, so each compounds with realized PnL. "buy <usd>" from the
+  // console still lets you force an exact amount for a one-off trade.
+  // Slot A runs the flip strategy on its own. Slot B only ever buys as
+  // "reinforcement" while Slot A is open and underwater - see the
+  // DUAL_TRIGGER_* settings below.
+  SLOT_A_SIZE_PERCENT: numeric(30),
+  SLOT_B_SIZE_PERCENT: numeric(30),
+  // Master switch - false means Slot B never buys, so the bot behaves
+  // exactly like the single-slot version.
+  DUAL_SLOT_ENABLED: boolFlag(true),
+  // How far underwater Slot A must be before Slot B reinforces, computed
+  // the same adaptive way as the sell target: (typical recent move over
+  // VOLATILITY_LOOKBACK_MS) * DUAL_TRIGGER_MULTIPLIER, clamped to
+  // [DUAL_TRIGGER_MIN_PERCENT, DUAL_TRIGGER_MAX_PERCENT]. Keep the max
+  // below STOP_LOSS_PERCENT, or Slot A gets stopped out before Slot B
+  // ever gets a chance to reinforce it.
+  DUAL_TRIGGER_MULTIPLIER: numeric(1),
+  DUAL_TRIGGER_MIN_PERCENT: numeric(3),
+  DUAL_TRIGGER_MAX_PERCENT: numeric(20),
   MIN_SOL_RESERVE: numeric(0.05),
 
   // --- The flip strategy -----------------------------------------------
@@ -114,7 +129,8 @@ function buildConfig(env: z.infer<typeof envSchema>) {
     mode: env.TRADING_MODE,
     paper: { startingBalanceUsd: env.PAPER_BALANCE_USD },
     trade: {
-      sizePercent: env.TRADE_SIZE_PERCENT,
+      slotASizePercent: env.SLOT_A_SIZE_PERCENT,
+      slotBSizePercent: env.SLOT_B_SIZE_PERCENT,
       minSolReserve: env.MIN_SOL_RESERVE,
     },
     strategy: {
@@ -129,6 +145,10 @@ function buildConfig(env: z.infer<typeof envSchema>) {
       adaptiveTargetMultiplier: env.ADAPTIVE_TARGET_MULTIPLIER,
       adaptiveTargetMinPercent: env.ADAPTIVE_TARGET_MIN_PERCENT,
       adaptiveTargetMaxPercent: env.ADAPTIVE_TARGET_MAX_PERCENT,
+      dualSlotEnabled: env.DUAL_SLOT_ENABLED,
+      dualTriggerMultiplier: env.DUAL_TRIGGER_MULTIPLIER,
+      dualTriggerMinPercent: env.DUAL_TRIGGER_MIN_PERCENT,
+      dualTriggerMaxPercent: env.DUAL_TRIGGER_MAX_PERCENT,
     },
     execution: {
       maxSlippageBps: env.MAX_SLIPPAGE_BPS,

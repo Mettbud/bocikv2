@@ -4,27 +4,36 @@ import type { BotConfig } from "./config.js";
 import { type FlipState, initialFlipState } from "./strategy.js";
 
 export interface PersistedState {
-  flip: FlipState;
+  slotA: FlipState;
+  slotB: FlipState;
   /** Only meaningful in paper mode - live balances always come from chain. */
   paperSolBalance: number;
   paperTokenBalance: number;
-  /** Sum of (sell proceeds - buy cost) across every completed flip, in USD. */
+  /** Sum of (sell proceeds - buy cost) across every completed flip, in USD, both slots combined. */
   realizedPnlUsd: number;
+}
+
+/** Older single-slot state files only had `flip`, not `slotA`/`slotB`. */
+interface LegacySingleSlotState {
+  flip?: FlipState;
 }
 
 export function loadState(config: BotConfig, defaultSolBalance: number): PersistedState {
   const path = config.files.state;
   if (existsSync(path)) {
-    const raw = JSON.parse(readFileSync(path, "utf8")) as PersistedState;
+    const raw = JSON.parse(readFileSync(path, "utf8")) as Partial<PersistedState> & LegacySingleSlotState;
     return {
-      flip: raw.flip ?? initialFlipState(),
+      // Migrate a pre-dual-slot state file: its one position becomes Slot A.
+      slotA: raw.slotA ?? raw.flip ?? initialFlipState(),
+      slotB: raw.slotB ?? initialFlipState(),
       paperSolBalance: raw.paperSolBalance ?? defaultSolBalance,
       paperTokenBalance: raw.paperTokenBalance ?? 0,
       realizedPnlUsd: raw.realizedPnlUsd ?? 0,
     };
   }
   return {
-    flip: initialFlipState(),
+    slotA: initialFlipState(),
+    slotB: initialFlipState(),
     paperSolBalance: defaultSolBalance,
     paperTokenBalance: 0,
     realizedPnlUsd: 0,
@@ -39,6 +48,7 @@ export function saveState(config: BotConfig, state: PersistedState): void {
 export interface TradeRecord {
   timestampIso: string;
   mode: "paper" | "live";
+  slot: "A" | "B";
   side: "BUY" | "SELL";
   price: number;
   tokenAmount: number;
@@ -50,7 +60,7 @@ export interface TradeRecord {
 }
 
 const CSV_HEADER =
-  "timestamp,mode,side,price,tokenAmount,solAmount,usdValue,roundTripCostPercent,netProfitPercent,txSignature\n";
+  "timestamp,mode,slot,side,price,tokenAmount,solAmount,usdValue,roundTripCostPercent,netProfitPercent,txSignature\n";
 
 export function appendTrade(config: BotConfig, trade: TradeRecord): void {
   const path = config.files.tradesCsv;
@@ -59,6 +69,7 @@ export function appendTrade(config: BotConfig, trade: TradeRecord): void {
   const row = [
     trade.timestampIso,
     trade.mode,
+    trade.slot,
     trade.side,
     trade.price,
     trade.tokenAmount,

@@ -19,35 +19,50 @@ export interface PositionSnapshot {
   stopLossPriceUsd: number | undefined;
 }
 
+export interface ReinforcementInfo {
+  /** DUAL_SLOT_ENABLED - false means Slot B never buys at all. */
+  enabled: boolean;
+  /** The live-computed drawdown Slot A must reach before Slot B reinforces. */
+  triggerDropPercent: number;
+  /** Slot A's current unrealized %, when it holds a position (negative = underwater). */
+  slotADrawdownPercent: number | undefined;
+}
+
+export interface SlotDashboardState {
+  label: "A" | "B";
+  sizePercent: number;
+  position: PositionSnapshot | undefined;
+  /** Slot A only: rebuy trigger below its own last sell. Slot B never rebuys on its own. */
+  rebuyTriggerUsd: number | undefined;
+  lastSellPriceUsd: number | undefined;
+  completedFlips: number;
+  adaptiveTargetEnabled: boolean;
+  nextTargetGainPercent: number | undefined;
+  staticTargetGainPercent: number;
+  nextBuyUsdEstimate: number | undefined;
+  buyImpactPercent: number | undefined;
+  sellImpactPercent: number | undefined;
+  roundTripCostPercent: number | undefined;
+  maxRoundTripCostPercent: number;
+  minNetProfitPercent: number;
+  /** Slot B only - undefined for Slot A. */
+  reinforcement: ReinforcementInfo | undefined;
+}
+
 export interface DashboardState {
   tokenSymbol: string;
   mode: "PAPER" | "LIVE";
   priceUsd: number | undefined;
-  position: PositionSnapshot | undefined;
-  /** Only meaningful while flat and a previous sell has happened. */
-  rebuyTriggerUsd: number | undefined;
-  lastSellPriceUsd: number | undefined;
-  completedFlips: number;
+  slotA: SlotDashboardState;
+  slotB: SlotDashboardState;
+  /** Combined across both slots. */
   realizedPnlUsd: number;
   solBalance: number;
   tokenBalance: number;
   paperUsdBalance: number | undefined;
-  buyImpactPercent: number | undefined;
-  sellImpactPercent: number | undefined;
-  roundTripCostPercent: number | undefined;
   /** Baseline pool spread (size-independent) - last checked at the last buy attempt. */
   spreadPercent: number | undefined;
   maxSpreadPercent: number;
-  minNetProfitPercent: number;
-  maxRoundTripCostPercent: number;
-  adaptiveTargetEnabled: boolean;
-  /** What the adaptive target would set the NEXT buy's sell target to, right now. */
-  nextTargetGainPercent: number | undefined;
-  /** The fixed TARGET_GAIN_PERCENT - shown when adaptive targeting is off. */
-  staticTargetGainPercent: number;
-  /** Next automatic buy size, as % of the spendable balance. */
-  tradeSizePercent: number;
-  nextBuyUsdEstimate: number | undefined;
   lastEvent: DashboardEvent | undefined;
   lastErrorMessage: string | undefined;
 }
@@ -60,60 +75,22 @@ export function formatDashboard(s: DashboardState): string {
   lines.push(`Price: ${usd(s.priceUsd, 8)}`);
   lines.push("");
 
-  if (s.position) {
-    const p = s.position;
-    lines.push(`Position:       ${p.tokenAmount.toLocaleString()} ${s.tokenSymbol}`);
-    lines.push(`Position value: ${usd(p.positionValueUsd)}`);
-    lines.push(`Entry price:    ${usd(p.buyPriceUsd, 8)}`);
-    lines.push(
-      `Unrealized:     ${colorize(pct(p.unrealizedPercent), signColor(p.unrealizedPercent))} (${colorize(usd(p.unrealizedUsd, 2), signColor(p.unrealizedUsd))})`,
-    );
-    lines.push(`Sell target:    ${usd(p.sellTargetUsd, 8)} (cel +${p.targetGainPercent.toFixed(2)}%, ustalony przy zakupie)`);
-    const netLabel =
-      p.netIfSoldNowPercent === undefined
-        ? "-"
-        : `${colorize(pct(p.netIfSoldNowPercent), signColor(p.netIfSoldNowPercent))} ${p.netIfSoldNowPercent >= s.minNetProfitPercent ? colorize("(would sell)", colors.GREEN) : colorize("(below min net)", colors.DIM)}`;
-    lines.push(`Net if sold now: ${netLabel}`);
-    if (p.stopLossPriceUsd !== undefined) {
-      lines.push(`Stop loss:      ${usd(p.stopLossPriceUsd, 8)}`);
-    }
-  } else {
-    lines.push("Position: none - awaiting buy signal");
-    if (s.rebuyTriggerUsd !== undefined) {
-      lines.push(`Rebuy below:    ${usd(s.rebuyTriggerUsd, 8)} (last sell ${usd(s.lastSellPriceUsd, 8)})`);
-    } else {
-      lines.push("First entry - buys on the next tick.");
-    }
-    if (s.nextBuyUsdEstimate !== undefined) {
-      lines.push(`Next buy size:  ${s.tradeSizePercent}% of balance (~${usd(s.nextBuyUsdEstimate, 2)})`);
-    }
-    if (s.adaptiveTargetEnabled) {
-      const targetLabel = s.nextTargetGainPercent !== undefined ? `+${s.nextTargetGainPercent.toFixed(2)}%` : "-";
-      lines.push(`Next target:    ${colorize("adaptive", colors.GREEN)}, aktualnie liczyłby ${targetLabel}`);
-    } else {
-      lines.push(`Next target:    ${colorize("stały", colors.DIM)} +${s.staticTargetGainPercent.toFixed(2)}%`);
-    }
-  }
+  lines.push(...formatSlot(s.slotA, s.tokenSymbol));
+  lines.push("");
+  lines.push(...formatSlot(s.slotB, s.tokenSymbol));
 
   lines.push("");
-  lines.push(`Completed flips: ${s.completedFlips}`);
-  lines.push(`Realized PnL:    ${colorize(usd(s.realizedPnlUsd, 2), signColor(s.realizedPnlUsd))}`);
+  lines.push(`Realized PnL (oba sloty): ${colorize(usd(s.realizedPnlUsd, 2), signColor(s.realizedPnlUsd))}`);
 
   lines.push("");
   lines.push(`SOL balance:       ${s.solBalance.toFixed(6)}`);
   lines.push(`${s.tokenSymbol} balance: ${s.tokenBalance.toLocaleString()}`);
   if (s.paperUsdBalance !== undefined) {
-    lines.push(`Paper equity (SOL + position): ${usd(s.paperUsdBalance, 2)}`);
+    lines.push(`Paper equity (SOL + pozycje): ${usd(s.paperUsdBalance, 2)}`);
   }
 
   lines.push("");
-  lines.push(
-    `Spread: ${formatPct(s.spreadPercent)} (max ${s.maxSpreadPercent}%)  ` +
-      `Price impact: buy ${formatPct(s.buyImpactPercent)}  sell ${formatPct(s.sellImpactPercent)}`,
-  );
-  lines.push(
-    `Round-trip cost est: ${formatPct(s.roundTripCostPercent)} (max ${s.maxRoundTripCostPercent}%)`,
-  );
+  lines.push(`Spread puli: ${formatPct(s.spreadPercent)} (max ${s.maxSpreadPercent}%)`);
 
   if (s.lastEvent) {
     lines.push("");
@@ -129,6 +106,69 @@ export function formatDashboard(s: DashboardState): string {
   lines.push(`Mode: ${colorize(s.mode, modeColor)}`);
 
   return lines.join("\n");
+}
+
+function formatSlot(slot: SlotDashboardState, tokenSymbol: string): string[] {
+  const lines: string[] = [];
+  lines.push(`${colors.BOLD}Slot ${slot.label}${colors.RESET} (${slot.sizePercent}% portfela)`);
+
+  if (slot.position) {
+    const p = slot.position;
+    lines.push(`  Pozycja:       ${p.tokenAmount.toLocaleString()} ${tokenSymbol}`);
+    lines.push(`  Wartość:       ${usd(p.positionValueUsd)}`);
+    lines.push(`  Cena wejścia:  ${usd(p.buyPriceUsd, 8)}`);
+    lines.push(
+      `  Niezreal.:     ${colorize(pct(p.unrealizedPercent), signColor(p.unrealizedPercent))} (${colorize(usd(p.unrealizedUsd, 2), signColor(p.unrealizedUsd))})`,
+    );
+    lines.push(`  Cel sprzedaży: ${usd(p.sellTargetUsd, 8)} (+${p.targetGainPercent.toFixed(2)}%, ustalony przy zakupie)`);
+    const netLabel =
+      p.netIfSoldNowPercent === undefined
+        ? "-"
+        : `${colorize(pct(p.netIfSoldNowPercent), signColor(p.netIfSoldNowPercent))} ${p.netIfSoldNowPercent >= slot.minNetProfitPercent ? colorize("(sprzedałby)", colors.GREEN) : colorize("(za mało netto)", colors.DIM)}`;
+    lines.push(`  Netto teraz:   ${netLabel}`);
+    if (p.stopLossPriceUsd !== undefined) {
+      lines.push(`  Stop loss:     ${usd(p.stopLossPriceUsd, 8)}`);
+    }
+  } else if (slot.reinforcement) {
+    const r = slot.reinforcement;
+    if (!r.enabled) {
+      lines.push(`  ${colorize("Wyłączony (DUAL_SLOT_ENABLED=false)", colors.DIM)}`);
+    } else if (r.slotADrawdownPercent === undefined) {
+      lines.push(`  Czeka na otwartą pozycję w Slocie A.`);
+    } else {
+      lines.push(
+        `  Czeka aż Slot A będzie na ${colorize(`-${r.triggerDropPercent.toFixed(2)}%`, colors.YELLOW)} ` +
+          `(teraz: ${colorize(pct(r.slotADrawdownPercent), signColor(r.slotADrawdownPercent))})`,
+      );
+    }
+  } else {
+    lines.push("  Pozycja: brak - czeka na sygnał kupna");
+    if (slot.rebuyTriggerUsd !== undefined) {
+      lines.push(`  Odkup poniżej: ${usd(slot.rebuyTriggerUsd, 8)} (ostatnia sprzedaż ${usd(slot.lastSellPriceUsd, 8)})`);
+    } else {
+      lines.push("  Pierwsze wejście - kupi przy najbliższym ticku.");
+    }
+  }
+
+  if (!slot.position) {
+    if (slot.nextBuyUsdEstimate !== undefined) {
+      lines.push(`  Wielkość kupna: ${slot.sizePercent}% salda (~${usd(slot.nextBuyUsdEstimate, 2)})`);
+    }
+    if (slot.adaptiveTargetEnabled) {
+      const targetLabel = slot.nextTargetGainPercent !== undefined ? `+${slot.nextTargetGainPercent.toFixed(2)}%` : "-";
+      lines.push(`  Następny cel:   ${colorize("adaptacyjny", colors.GREEN)}, aktualnie liczyłby ${targetLabel}`);
+    } else {
+      lines.push(`  Następny cel:   ${colorize("stały", colors.DIM)} +${slot.staticTargetGainPercent.toFixed(2)}%`);
+    }
+  }
+
+  lines.push(`  Ukończone flipy: ${slot.completedFlips}`);
+  lines.push(
+    `  Impact: kup ${formatPct(slot.buyImpactPercent)} sprzedaj ${formatPct(slot.sellImpactPercent)} | ` +
+      `koszt rundy: ${formatPct(slot.roundTripCostPercent)} (max ${slot.maxRoundTripCostPercent}%)`,
+  );
+
+  return lines;
 }
 
 function formatPct(value: number | undefined): string {
@@ -152,5 +192,7 @@ export function renderDashboard(s: DashboardState): void {
   // works everywhere console.clear() does, plus where it doesn't.
   process.stdout.write("\x1b[2J\x1b[3J\x1b[H");
   console.log(formatDashboard(s));
-  console.log("\ncommands: buy <usd>  sell [percent]  panic  reset  status  quit");
+  console.log(
+    "\ncommands: buy <usd> [a|b]  sell [percent] [a|b]  panic [a|b]  reset  status  quit",
+  );
 }
