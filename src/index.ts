@@ -10,6 +10,7 @@ import {
   afterBuy,
   afterSell,
   grossMovePercent,
+  initialFlipState,
   isBreakoutBuySignal,
   isBuySignal,
   isReinforcementBuySignal,
@@ -917,9 +918,13 @@ async function main() {
       .getPrice()
       .then((solUsd) => {
         s = {
-          slotA: freshFlipKeepingLastSell(s.slotA),
-          slotB: freshFlipKeepingLastSell(s.slotB),
-          slotC: freshFlipKeepingLastSell(s.slotC),
+          // A genuinely fresh start, not just "close the open position" -
+          // lastSellPrice and completedFlips are wiped too, so a reset
+          // really does put every slot back to "never traded", including
+          // re-arming SLOT_A_REQUIRE_MANUAL_FIRST_BUY for the next entry.
+          slotA: initialFlipState(),
+          slotB: initialFlipState(),
+          slotC: initialFlipState(),
           paperSolBalance: config.paper.startingBalanceUsd / solUsd,
           paperTokenBalance: 0,
           realizedPnlUsd: 0,
@@ -932,26 +937,16 @@ async function main() {
         trailingStopPendingSinceMs.A = null;
         trailingStopPendingSinceMs.B = null;
         trailingStopPendingSinceMs.C = null;
+        peakUpdatedAtMs.A = null;
+        peakUpdatedAtMs.B = null;
+        peakUpdatedAtMs.C = null;
         breakoutBuyPendingSinceMs = null;
         saveState(config, s);
-        const msg = `PAPER session reset (wszystkie sloty) - fresh balance $${config.paper.startingBalanceUsd.toFixed(2)}`;
+        const msg = `PAPER session reset (wszystkie sloty, od zera) - fresh balance $${config.paper.startingBalanceUsd.toFixed(2)}`;
         setEvent(msg);
         log.info(msg);
       })
       .catch((err) => log.error("reset failed", { error: String(err) }));
-  }
-
-  function freshFlipKeepingLastSell(flip: FlipState): FlipState {
-    return {
-      ...flip,
-      phase: "AWAITING_BUY",
-      buyPrice: null,
-      tokenAmount: null,
-      entryCost: null,
-      targetGainPercent: null,
-      peakPriceUsd: null,
-      breakoutPeakUsd: null,
-    };
   }
 
   // --- dashboard ------------------------------------------------------

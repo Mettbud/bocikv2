@@ -331,11 +331,13 @@ W tym samym terminalu działają komendy (wpisz i Enter). Domyślny slot to
 `a`, gdy pominięty:
 
 ```
-buy [usd] [a|b]       - kup ręcznie w danym slocie (pomija sygnał strategii, ale nie limity bezpieczeństwa); bez kwoty
-                         użyty jest normalny stały rozmiar slotu (SLOT_A/B_SIZE_PERCENT), tak jak przy zwykłym auto-kupnie
-sell [percent] [a|b]  - sprzedaj tyle % pozycji w danym slocie (domyślnie 100%), pomija wymóg minimalnego zysku netto
-panic [a|b]           - natychmiastowe wyjście z pozycji; bez argumentu wychodzi z OBU slotów
-reset                 - (tylko paper) zeruje saldo i oba sloty do stanu startowego
+buy [usd] [a|b|c]     - kup ręcznie w danym slocie (pomija sygnał strategii, ale nie limity bezpieczeństwa); bez kwoty
+                         użyty jest normalny stały rozmiar slotu (SLOT_A/B/C_SIZE_PERCENT), tak jak przy zwykłym auto-kupnie
+sell [percent] [a|b|c] - sprzedaj tyle % pozycji w danym slocie (domyślnie 100%), pomija wymóg minimalnego zysku netto
+panic [a|b|c]          - natychmiastowe wyjście z pozycji; bez argumentu wychodzi ze WSZYSTKICH slotów
+reset                  - (tylko paper) zeruje saldo i WSZYSTKIE sloty do stanu startowego - od zera, łącznie z
+                         lastSellPrice i licznikiem flipów, więc jeśli masz SLOT_A_REQUIRE_MANUAL_FIRST_BUY=true,
+                         po resecie znowu czeka na ręczny "buy" zamiast odkupować automatycznie
 status                - wymusza odświeżenie (dashboard i tak odświeża się sam)
 quit / exit           - zamyka bota, zapisując stan
 ```
