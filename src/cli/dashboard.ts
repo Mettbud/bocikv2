@@ -59,6 +59,9 @@ export interface DashboardState {
   realizedPnlUsd: number;
   solBalance: number;
   tokenBalance: number;
+  /** Combined market value of both slots' open positions, at the current price. */
+  investedUsd: number;
+  investedPercentOfEquity: number | undefined;
   paperUsdBalance: number | undefined;
   /** Baseline pool spread (size-independent) - last checked at the last buy attempt. */
   spreadPercent: number | undefined;
@@ -81,6 +84,8 @@ export function formatDashboard(s: DashboardState): string {
 
   lines.push("");
   lines.push(`Realized PnL (oba sloty): ${colorize(usd(s.realizedPnlUsd, 2), signColor(s.realizedPnlUsd))}`);
+  const investedPctLabel = s.investedPercentOfEquity !== undefined ? ` (${s.investedPercentOfEquity.toFixed(1)}% portfela)` : "";
+  lines.push(`W rynku teraz:            ${usd(s.investedUsd, 2)}${investedPctLabel}`);
 
   lines.push("");
   lines.push(`SOL balance:       ${s.solBalance.toFixed(6)}`);

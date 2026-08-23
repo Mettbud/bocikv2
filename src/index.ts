@@ -728,20 +728,27 @@ async function main() {
   }
 
   function buildSnapshot(): DashboardState {
+    const slotA = buildSlotSnapshot("A");
+    const slotB = buildSlotSnapshot("B");
+    const investedUsd = (slotA.position?.positionValueUsd ?? 0) + (slotB.position?.positionValueUsd ?? 0);
+    const equityUsd =
+      latestSolUsd !== undefined ? latestSolBalance * latestSolUsd + investedUsd : undefined;
+
     return {
       tokenSymbol: config.token.symbol,
       mode: config.mode === "live" ? "LIVE" : "PAPER",
       priceUsd: latestPriceUsd,
-      slotA: buildSlotSnapshot("A"),
-      slotB: buildSlotSnapshot("B"),
+      slotA,
+      slotB,
       realizedPnlUsd: s.realizedPnlUsd,
       solBalance: latestSolBalance,
       tokenBalance: latestTokenBalance,
+      // How much is actually deployed in the market right now (both slots'
+      // open positions, marked at the current price) vs. sitting idle as SOL.
+      investedUsd,
+      investedPercentOfEquity: equityUsd !== undefined && equityUsd > 0 ? (investedUsd / equityUsd) * 100 : undefined,
       // Paper mode's total portfolio value (SOL + any open positions), not just cash on hand.
-      paperUsdBalance:
-        config.mode === "paper" && latestSolUsd !== undefined
-          ? latestSolBalance * latestSolUsd + latestTokenBalance * (latestPriceUsd ?? 0)
-          : undefined,
+      paperUsdBalance: config.mode === "paper" ? equityUsd : undefined,
       spreadPercent: latestSpreadPercent,
       maxSpreadPercent: config.strategy.maxSpreadPercent,
       lastEvent: lastEvent ? { message: lastEvent.message, ageMs: Date.now() - lastEvent.atMs } : undefined,

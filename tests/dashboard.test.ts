@@ -35,6 +35,8 @@ const base: DashboardState = {
   realizedPnlUsd: 0,
   solBalance: 0.05,
   tokenBalance: 0,
+  investedUsd: 0,
+  investedPercentOfEquity: undefined,
   paperUsdBalance: 1000,
   spreadPercent: undefined,
   maxSpreadPercent: 1,
@@ -125,6 +127,13 @@ describe("formatDashboard", () => {
   it("shows the pool spread against its configured max", () => {
     const out = formatDashboard({ ...base, spreadPercent: 0.24, maxSpreadPercent: 1 });
     expect(out).toContain("Spread puli: 0.24% (max 1%)");
+  });
+
+  it("shows how much is currently deployed in the market", () => {
+    const out = formatDashboard({ ...base, investedUsd: 320.5, investedPercentOfEquity: 32.05 });
+    expect(out).toContain("W rynku teraz:");
+    expect(out).toContain("$320.50");
+    expect(out).toContain("32.0% portfela");
   });
 
   it("shows the adaptive target when enabled", () => {
