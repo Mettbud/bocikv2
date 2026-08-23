@@ -194,6 +194,22 @@ Prawdziwa sprzedaż nadal wymaga przejścia przez **właściwy, nierozluźniony*
 próg `TRAILING_STOP_PERCENT` - tolerancja wpływa tylko na to, czy licznik
 czasu żyje dalej, nie na to, czy bot faktycznie sprzeda.
 
+**Wąskie, boczne pasmo pod wodą - luka, na którą trailing stop nie
+pomaga:** trailing stop chroni zysk dopiero gdy pozycja realnie weszła na
+plus (`TRAILING_STOP_ARM_PERCENT`). Jeśli cena kilkadziesiąt minut kręci
+się w wąskim paśmie, które nigdy nie sięga tego progu (np. cały czas
+między -10% a -1% od ceny zakupu), ani cel sprzedaży, ani trailing stop
+się nie uzbroją - bot świadomie czeka, bo sprzedanie na lokalnym "szczycie"
+tego pasma wciąż byłoby sprzedażą na stracie (złamałoby
+`MIN_NET_PROFIT_PERCENT`). To dotyczy obu slotów tak samo, ale Slot B ma
+dodatkową furtkę: `SLOT_B_TRAILING_STOP_ARM_PERCENT` /
+`SLOT_B_TRAILING_STOP_PERCENT` pozwalają dać **tylko Slotowi B** niższy
+próg uzbrojenia niż Slotowi A (domyślnie identyczny - zero zmiany
+zachowania, dopóki go nie obniżysz). Ma to sens dla B, bo B i tak kupuje
+"w dołku" (podczas drawdownu A) i jego rola to szybkie, drobne flipy - więc
+niższy próg pozwala mu złapać nawet niewielkie odbicie w górę zamiast
+czekać na duży ruch, którego wąskie pasmo może nigdy nie dać.
+
 ## Dwa sloty: Slot A + Slot B jako "dobicie"
 
 Bot prowadzi **dwie niezależne pozycje jednocześnie**, każda po

@@ -135,6 +135,12 @@ async function main() {
   function sizePercentFor(slot: SlotKey): number {
     return slot === "A" ? config.trade.slotASizePercent : config.trade.slotBSizePercent;
   }
+  /** Slot B can arm/trail at smaller moves than Slot A - see SLOT_B_TRAILING_STOP_* in config.ts. */
+  function trailingStopParamsFor(slot: SlotKey): { armPercent: number; trailPercent: number } {
+    return slot === "A"
+      ? { armPercent: config.strategy.trailingStopArmPercent, trailPercent: config.strategy.trailingStopPercent }
+      : { armPercent: config.strategy.slotBTrailingStopArmPercent, trailPercent: config.strategy.slotBTrailingStopPercent };
+  }
 
   log.info("bocik flip-bot starting", {
     mode: config.mode,
@@ -350,18 +356,14 @@ async function main() {
     // (looser) band decides whether the confirmation timer keeps running -
     // a tick that bounces back a fraction of a percent within the band
     // doesn't reset the whole countdown to zero, only a real move back out
-    // of it does.
-    const trulyTriggered = isTrailingStopTriggered(
-      flip,
-      currentPriceUsd,
-      config.strategy.trailingStopArmPercent,
-      config.strategy.trailingStopPercent,
-    );
+    // of it does. Slot B may arm/trail at smaller moves than Slot A.
+    const { armPercent, trailPercent } = trailingStopParamsFor(slotKey);
+    const trulyTriggered = isTrailingStopTriggered(flip, currentPriceUsd, armPercent, trailPercent);
     const withinBand = isWithinTrailingStopBand(
       flip,
       currentPriceUsd,
-      config.strategy.trailingStopArmPercent,
-      config.strategy.trailingStopPercent,
+      armPercent,
+      trailPercent,
       config.strategy.trailingStopConfirmationTolerancePercent,
     );
 
@@ -894,10 +896,10 @@ async function main() {
                   peakPriceUsd: flip.peakPriceUsd ?? flip.buyPrice,
                   armed:
                     flip.peakPriceUsd !== null &&
-                    grossMovePercent(flip.buyPrice, flip.peakPriceUsd) >= config.strategy.trailingStopArmPercent,
+                    grossMovePercent(flip.buyPrice, flip.peakPriceUsd) >= trailingStopParamsFor(slotKey).armPercent,
                   triggerPriceUsd:
                     flip.peakPriceUsd !== null
-                      ? flip.peakPriceUsd * (1 - config.strategy.trailingStopPercent / 100)
+                      ? flip.peakPriceUsd * (1 - trailingStopParamsFor(slotKey).trailPercent / 100)
                       : undefined,
                 }
               : undefined,

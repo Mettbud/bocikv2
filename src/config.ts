@@ -99,6 +99,17 @@ const envSchema = z.object({
   TRAILING_STOP_ENABLED: boolFlag(true),
   TRAILING_STOP_ARM_PERCENT: numeric(4),
   TRAILING_STOP_PERCENT: numeric(2),
+  // Slot B specifically exists to flip fast while Slot A is underwater - in
+  // a tight, choppy range that never actually clears TRAILING_STOP_ARM_PERCENT,
+  // Slot B's position can sit forever (both the target AND the shared
+  // trailing stop above require a real move into profit first, and neither
+  // will ever sell at a loss just because it's a local high - that would
+  // violate MIN_NET_PROFIT_PERCENT). These let Slot B arm/trail at smaller
+  // moves than Slot A, so it locks in small pops instead of waiting for a
+  // bigger move that a narrow range may never produce. Default to the same
+  // values as Slot A's (no behavior change until you lower them for B).
+  SLOT_B_TRAILING_STOP_ARM_PERCENT: numeric(4),
+  SLOT_B_TRAILING_STOP_PERCENT: numeric(2),
   // The "peak" is whatever price a single PRICE_POLL_INTERVAL_MS tick
   // happened to see - a brief spike/wick sets it just as much as a real
   // move. When > 0, the pullback condition above must hold continuously
@@ -204,6 +215,8 @@ function buildConfig(env: z.infer<typeof envSchema>) {
       trailingStopEnabled: env.TRAILING_STOP_ENABLED,
       trailingStopArmPercent: env.TRAILING_STOP_ARM_PERCENT,
       trailingStopPercent: env.TRAILING_STOP_PERCENT,
+      slotBTrailingStopArmPercent: env.SLOT_B_TRAILING_STOP_ARM_PERCENT,
+      slotBTrailingStopPercent: env.SLOT_B_TRAILING_STOP_PERCENT,
       trailingStopConfirmationMs: env.TRAILING_STOP_CONFIRMATION_MS,
       trailingStopConfirmationTolerancePercent: env.TRAILING_STOP_CONFIRMATION_TOLERANCE_PERCENT,
       breakoutBuyEnabled: env.BREAKOUT_BUY_ENABLED,
