@@ -341,7 +341,16 @@ wiarygodnym oszacowaniem tego, co dałaby prawdziwa transakcja - bez ryzykowania
 Żeby przetestować dwa różne ustawienia równolegle (np. `.env` = wersja
 bezpieczna, `.env.b` z `BREAKOUT_BUY_ENABLED=true` żeby zobaczyć czy
 kupowanie na wybiciach faktycznie się opłaca) - **nie trzeba kopiować
-całego kodu**. Ten sam bot, dwa pliki `.env`, dwa terminale:
+całego kodu**. Ten sam bot, dwa pliki `.env`, dwa terminale. Gotowy
+szablon wersji B (breakout buy włączony, osobne ścieżki na dane) jest już
+w repo jako `.env.b.example`:
+
+```bash
+cp .env.b.example .env.b
+# uzupełnij WALLET_PRIVATE_KEY / JUPITER_API_KEY tak samo jak w .env
+```
+
+Albo zrób to ręcznie z dowolnego innego punktu startowego:
 
 ```bash
 cp .env .env.b
