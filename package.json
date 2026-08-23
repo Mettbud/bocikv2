@@ -10,6 +10,7 @@
   },
   "scripts": {
     "bot": "tsx src/index.ts",
+    "analyze": "tsx scripts/analyzeVolatility.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"

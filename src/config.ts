@@ -30,7 +30,12 @@ const envSchema = z.object({
   TRADING_MODE: z.enum(["paper", "live"]).default("paper"),
   PAPER_BALANCE_USD: numeric(1000),
 
-  TRADE_USD: numeric(50),
+  // Every automatic buy spends this % of the currently spendable balance
+  // (SOL balance minus MIN_SOL_RESERVE) - not a fixed dollar figure. As
+  // realized PnL compounds the balance up or down, the position size
+  // compounds with it. "buy <usd>" from the console still lets you force
+  // an exact dollar amount for a one-off manual trade.
+  TRADE_SIZE_PERCENT: numeric(50),
   MIN_SOL_RESERVE: numeric(0.05),
 
   // --- The flip strategy -----------------------------------------------
@@ -49,6 +54,10 @@ const envSchema = z.object({
 
   MAX_SLIPPAGE_BPS: numeric(150),
   MAX_PRICE_IMPACT_BPS: numeric(250),
+  // Baseline pool spread (round-tripping a small, fixed reference amount),
+  // independent of our own trade size. A wide spread here means the pool is
+  // thin right now - refuse to trade at all, no matter how small the order.
+  MAX_SPREAD_BPS: numeric(100),
 
   // Optional safety net only - not part of the flip logic itself. Set to 0
   // to disable. Guards against holding a bag through a crash while we wait
@@ -90,7 +99,7 @@ function buildConfig(env: z.infer<typeof envSchema>) {
     mode: env.TRADING_MODE,
     paper: { startingBalanceUsd: env.PAPER_BALANCE_USD },
     trade: {
-      usd: env.TRADE_USD,
+      sizePercent: env.TRADE_SIZE_PERCENT,
       minSolReserve: env.MIN_SOL_RESERVE,
     },
     strategy: {
@@ -98,6 +107,7 @@ function buildConfig(env: z.infer<typeof envSchema>) {
       minNetProfitPercent: env.MIN_NET_PROFIT_PERCENT,
       rebuyDropPercent: env.REBUY_DROP_PERCENT,
       maxRoundTripCostPercent: env.MAX_ROUND_TRIP_COST_PERCENT,
+      maxSpreadPercent: env.MAX_SPREAD_BPS / 100,
       stopLossPercent: env.STOP_LOSS_PERCENT,
     },
     execution: {

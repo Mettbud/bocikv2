@@ -16,8 +16,12 @@ const base: DashboardState = {
   buyImpactPercent: undefined,
   sellImpactPercent: undefined,
   roundTripCostPercent: undefined,
+  spreadPercent: undefined,
+  maxSpreadPercent: 1,
   minNetProfitPercent: 2,
   maxRoundTripCostPercent: 4,
+  tradeSizePercent: 50,
+  nextBuyUsdEstimate: undefined,
   lastEvent: undefined,
   lastErrorMessage: undefined,
 };
@@ -55,5 +59,15 @@ describe("formatDashboard", () => {
     expect(out).toContain("Sell target:    $0.02650000");
     expect(out).toContain("Net if sold now:");
     expect(out).toContain("Stop loss:      $0.01875000");
+  });
+
+  it("shows the next buy size as a % of balance while flat", () => {
+    const out = formatDashboard({ ...base, tradeSizePercent: 50, nextBuyUsdEstimate: 475.12 });
+    expect(out).toContain("Next buy size:  50% of balance (~$475.12)");
+  });
+
+  it("shows the pool spread against its configured max", () => {
+    const out = formatDashboard({ ...base, spreadPercent: 0.24, maxSpreadPercent: 1 });
+    expect(out).toContain("Spread: 0.24% (max 1%)");
   });
 });

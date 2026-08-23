@@ -33,8 +33,14 @@ export interface DashboardState {
   buyImpactPercent: number | undefined;
   sellImpactPercent: number | undefined;
   roundTripCostPercent: number | undefined;
+  /** Baseline pool spread (size-independent) - last checked at the last buy attempt. */
+  spreadPercent: number | undefined;
+  maxSpreadPercent: number;
   minNetProfitPercent: number;
   maxRoundTripCostPercent: number;
+  /** Next automatic buy size, as % of the spendable balance. */
+  tradeSizePercent: number;
+  nextBuyUsdEstimate: number | undefined;
   lastEvent: DashboardEvent | undefined;
   lastErrorMessage: string | undefined;
 }
@@ -71,6 +77,9 @@ export function formatDashboard(s: DashboardState): string {
     } else {
       lines.push("First entry - buys on the next tick.");
     }
+    if (s.nextBuyUsdEstimate !== undefined) {
+      lines.push(`Next buy size:  ${s.tradeSizePercent}% of balance (~${usd(s.nextBuyUsdEstimate, 2)})`);
+    }
   }
 
   lines.push("");
@@ -86,8 +95,11 @@ export function formatDashboard(s: DashboardState): string {
 
   lines.push("");
   lines.push(
-    `Price impact: buy ${formatPct(s.buyImpactPercent)}  sell ${formatPct(s.sellImpactPercent)}  ` +
-      `round-trip cost est: ${formatPct(s.roundTripCostPercent)} (max ${s.maxRoundTripCostPercent}%)`,
+    `Spread: ${formatPct(s.spreadPercent)} (max ${s.maxSpreadPercent}%)  ` +
+      `Price impact: buy ${formatPct(s.buyImpactPercent)}  sell ${formatPct(s.sellImpactPercent)}`,
+  );
+  lines.push(
+    `Round-trip cost est: ${formatPct(s.roundTripCostPercent)} (max ${s.maxRoundTripCostPercent}%)`,
   );
 
   if (s.lastEvent) {

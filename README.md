@@ -48,13 +48,29 @@ Dlatego domyślne ustawienia to:
 - `MAX_ROUND_TRIP_COST_PERCENT=4` - jeśli koszty akurat wystrzelą powyżej tego
   (słaba płynność, szeroki spread), bot w ogóle nie wchodzi w pozycję.
 
-Im większa transakcja (`TRADE_USD`), tym mniejszy % zjadają opłaty sieciowe -
-przy $200+ nawet 3-4% celu brutto już ma sens. Przy $20-30 lepiej trzymać się
-6%+, bo stałe opłaty sieciowe to relatywnie duży kawałek.
+Im większa transakcja, tym mniejszy % zjadają opłaty sieciowe - przy $200+
+nawet 3-4% celu brutto już ma sens. Przy $20-30 lepiej trzymać się 6%+, bo
+stałe opłaty sieciowe to relatywnie duży kawałek. Automatyczne kupno nie ma
+stałej kwoty w dolarach - to `TRADE_SIZE_PERCENT` (domyślnie 50%) aktualnego
+salda ponad `MIN_SOL_RESERVE`, więc wielkość transakcji rośnie/maleje razem z
+kontem w miarę zysków/strat.
 
 Te liczby to punkt startowy, nie wyrocznia - realny spread zależy od
 płynności konkretnej puli w danym momencie, dlatego bot i tak liczy to na
 żywo, a nie tylko ufa ustawieniom w `.env`.
+
+### Osobny bezpiecznik: `MAX_SPREAD_BPS`
+
+Powyższe koszty (`buy impact`/`sell impact`) liczone są **dla wielkości
+naszej transakcji** - im większe zlecenie, tym większy wpływ na cenę.
+`MAX_SPREAD_BPS` to co innego: bot bierze małą, stałą kwotę referencyjną
+(`PRICE_REFERENCE_SOL_AMOUNT`, domyślnie 0.01 SOL) i sprawdza, ile z niej
+wraca po odbiciu tam i z powrotem - to bazowy spread samej puli, **niezależny
+od wielkości naszego zlecenia**. Jeśli akurat jest szeroki (płynność się
+wyparowała, ktoś robi dziwną świecę), bot w ogóle nie handluje, nawet gdyby
+próg zysku był spełniony - to sygnał "ta pula teraz nie nadaje się do
+handlu", nie tylko "ta transakcja jest za droga". Domyślnie `MAX_SPREAD_BPS=100`
+(1%); dashboard pokazuje to na żywo w linii `Spread: X% (max Y%)`.
 
 ## Jak działa strategia (`src/strategy.ts`)
 
@@ -77,6 +93,30 @@ wyjść:
   strategii "kup nisko/sprzedaj wysoko"), która wymusza wyjście, gdyby cena
   poszła mocno w dół i "sprzedaj wysoko" nigdy by nie nadeszło. Ustaw na 0,
   żeby wyłączyć.
+
+## Analiza rynku: ile CYBERLEEK faktycznie się rusza
+
+Zanim ustawisz `TARGET_GAIN_PERCENT` na wyczucie, zmierz to:
+
+```bash
+npm run analyze                          # zbiera 15 minut próbek
+ANALYZE_DURATION_MINUTES=60 npm run analyze   # dłuższa, dokładniejsza próbka
+```
+
+Skrypt (`scripts/analyzeVolatility.ts`) pyta o **prawdziwą cenę CYBERLEEK z
+Jupitera** co `PRICE_POLL_INTERVAL_MS` (dokładnie tak samo jak robi to bot
+podczas handlu) i po zebraniu próbek pokazuje:
+
+- ile realnie porusza się cena w oknach 5s/15s/30s/1min/5min (średnia,
+  mediana, max w górę, max w dół),
+- zmierzoną zmienność i - na jej podstawie (model losowego błądzenia) -
+  orientacyjny czas oczekiwania na ruch +2%, +3%, +4%, +6%, +8%, +10%,
+- zestawienie z aktualnym `TARGET_GAIN_PERCENT`, żeby było widać, czy cel
+  jest w ogóle realistyczny dla tego, jak ten konkretny token się zachowuje.
+
+Ctrl+C w trakcie zbierania i tak pokaże analizę tego, co zdążyło się zebrać.
+To jest szacunek (memecoiny ruszają się "skokowo", nie jak czysty random
+walk), ale dużo lepszy punkt startowy niż zgadywanie.
 
 ## Dashboard i komendy
 
@@ -110,13 +150,17 @@ src/
                     live: podpisanie i wysłanie transakcji)
   ledger.ts      - trwały stan (data/state.json) + log transakcji (data/trades.csv)
   wallet.ts       - wczytanie klucza portfela (tylko tryb live)
+  sizing.ts       - wielkość automatycznego kupna jako % salda
   cli/
     format.ts     - kolory/formatowanie liczb w terminalu
     dashboard.ts  - czyste renderowanie ekranu stanu (testowalne bez I/O)
     commands.ts   - komendy z stdin: buy/sell/panic/reset/status/quit
   index.ts        - pętla główna: strategia + dashboard + komendy
+scripts/
+  analyzeVolatility.ts - narzędzie do pomiaru realnej zmienności tokena
 tests/
-  strategy.test.ts, costModel.test.ts, dashboard.test.ts - testy jednostkowe
+  strategy.test.ts, costModel.test.ts, dashboard.test.ts, sizing.test.ts,
+  analyzeVolatility.test.ts - testy jednostkowe
 ```
 
 ## Uruchomienie
@@ -140,10 +184,10 @@ wiarygodnym oszacowaniem tego, co dałaby prawdziwa transakcja - bez ryzykowania
 2. Utwórz **dedykowany** hot-wallet (nigdy głównego portfela) i wklej jego
    klucz prywatny (base58 albo tablica JSON z `solana-keygen`) do
    `WALLET_PRIVATE_KEY`.
-3. Zasil portfel odpowiednią ilością SOL - `TRADE_USD` na kupno plus
-   `MIN_SOL_RESERVE` jako bufor na opłaty sieciowe (bot nigdy nie zejdzie
+3. Zasil portfel odpowiednią ilością SOL - bot wyda `TRADE_SIZE_PERCENT`%
+   salda ponad `MIN_SOL_RESERVE` (bufor na opłaty sieciowe, nigdy nie zejdzie
    poniżej tego minimum).
-4. Zacznij od małego `TRADE_USD` i obserwuj `data/bot.log` oraz
+4. Zacznij od małego `TRADE_SIZE_PERCENT` (np. 10-20%) i obserwuj `data/bot.log` oraz
    `data/trades.csv` przez kilka pełnych cykli, zanim zwiększysz stawkę.
 
 ## Świadome uproszczenia względem `botrade`

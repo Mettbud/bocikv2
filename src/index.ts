@@ -23,6 +23,7 @@ import {
 } from "./strategy.js";
 import { appendTrade, loadState, saveState, type PersistedState } from "./ledger.js";
 import { executeLeg, priceLeg } from "./trader.js";
+import { computePortfolioTradeUsd } from "./sizing.js";
 import { renderDashboard, type DashboardState } from "./cli/dashboard.js";
 import { startCommandLoop } from "./cli/commands.js";
 
@@ -55,6 +56,7 @@ async function main() {
   let latestSolBalance = 0;
   let latestTokenBalance = 0;
   let latestSolUsd: number | undefined;
+  let latestSpreadPercent: number | undefined;
 
   const setEvent = (message: string) => {
     lastEvent = { message, atMs: Date.now() };
@@ -125,8 +127,10 @@ async function main() {
       return;
     }
 
+    // The spread gate itself lives in executeBuy (it applies to manual buys
+    // too) - this just decides whether it's worth checking this tick at all.
     if (s.flip.phase === "AWAITING_BUY" && isBuySignal(s.flip, currentPriceUsd, config.strategy.rebuyDropPercent)) {
-      await executeBuy(config.trade.usd, { requireCostGate: true, tag: "AUTO" });
+      await executeBuy(undefined, { requireCostGate: true, tag: "AUTO" });
     }
   }
 
@@ -224,10 +228,38 @@ async function main() {
     return solPerToken * solUsd;
   }
 
+  /**
+   * The pool's baseline spread: round-trip a small, fixed reference amount
+   * (PRICE_REFERENCE_SOL_AMOUNT) both ways and see how much of it comes
+   * back. Unlike the buy/sell price impact figures (which scale with OUR
+   * trade size), this is a size-independent read on how thin/wide the pool
+   * is right now - the same signal MAX_SPREAD_BPS used in the original bot.
+   * A wide spread here means "don't trade this pool right now" regardless
+   * of how big or small the order is.
+   */
+  async function getPoolSpreadPercent(): Promise<number> {
+    const solIn = config.priceReferenceSolAmount;
+    const amountLamports = Math.round(solIn * 10 ** solDecimals);
+    const out = await client.getQuote({
+      inputMint: config.token.solMint,
+      outputMint: config.token.mint,
+      amount: String(amountLamports),
+      slippageBps: config.execution.maxSlippageBps,
+    });
+    const back = await client.getQuote({
+      inputMint: config.token.mint,
+      outputMint: config.token.solMint,
+      amount: out.outAmount,
+      slippageBps: config.execution.maxSlippageBps,
+    });
+    const solBack = Number(back.outAmount) / 10 ** solDecimals;
+    return Math.max(0, ((solIn - solBack) / solIn) * 100);
+  }
+
   // --- buy/sell execution, shared by the automatic loop and manual commands
 
   async function executeBuy(
-    usdAmount: number,
+    usdAmountOverride: number | undefined,
     opts: { requireCostGate: boolean; tag: "AUTO" | "MANUAL" },
   ): Promise<void> {
     if (s.flip.phase !== "AWAITING_BUY") {
@@ -236,19 +268,34 @@ async function main() {
     }
 
     const solUsd = await solPrice.getPrice();
+    const solBalance = config.mode === "live" && owner ? await getSolBalanceSol(connection, owner) : s.paperSolBalance;
+
+    // A manual "buy <usd>" forces an exact amount; the automatic strategy
+    // sizes every buy as TRADE_SIZE_PERCENT of the spendable balance, so the
+    // position compounds with the account instead of staying pinned to a
+    // fixed dollar figure.
+    const usdAmount =
+      usdAmountOverride ?? computePortfolioTradeUsd(solBalance, config.trade.minSolReserve, solUsd, config.trade.sizePercent);
+    if (usdAmount <= 0) {
+      const msg = "skipping buy - nothing spendable above MIN_SOL_RESERVE";
+      log.warn(msg);
+      if (opts.tag === "MANUAL") console.log(msg);
+      return;
+    }
     const solIn = usdAmount / solUsd;
     const amountLamports = Math.round(solIn * 10 ** solDecimals);
 
-    if (config.mode === "live" && owner) {
-      const solBalance = await getSolBalanceSol(connection, owner);
-      if (solBalance - solIn < config.trade.minSolReserve) {
-        const msg = `skipping buy - would breach MIN_SOL_RESERVE (balance ${solBalance.toFixed(4)}, need ${solIn.toFixed(4)})`;
-        log.warn(msg);
-        if (opts.tag === "MANUAL") console.log(msg);
-        return;
-      }
-    } else if (s.paperSolBalance < solIn) {
-      const msg = `skipping buy - insufficient paper SOL balance (${s.paperSolBalance.toFixed(4)} < ${solIn.toFixed(4)})`;
+    if (solBalance - solIn < config.trade.minSolReserve) {
+      const msg = `skipping buy - would breach MIN_SOL_RESERVE (balance ${solBalance.toFixed(4)}, need ${solIn.toFixed(4)})`;
+      log.warn(msg);
+      if (opts.tag === "MANUAL") console.log(msg);
+      return;
+    }
+
+    const spreadPercent = await getPoolSpreadPercent();
+    latestSpreadPercent = spreadPercent;
+    if (spreadPercent > config.strategy.maxSpreadPercent) {
+      const msg = `skipping buy - pool spread too wide (${spreadPercent.toFixed(2)}% > max ${config.strategy.maxSpreadPercent}%)`;
       log.warn(msg);
       if (opts.tag === "MANUAL") console.log(msg);
       return;
@@ -520,8 +567,15 @@ async function main() {
       buyImpactPercent: latestBuyImpactPercent,
       sellImpactPercent: latestSellImpactPercent,
       roundTripCostPercent: latestRoundTripCostPercent,
+      spreadPercent: latestSpreadPercent,
+      maxSpreadPercent: config.strategy.maxSpreadPercent,
       minNetProfitPercent: config.strategy.minNetProfitPercent,
       maxRoundTripCostPercent: config.strategy.maxRoundTripCostPercent,
+      tradeSizePercent: config.trade.sizePercent,
+      nextBuyUsdEstimate:
+        flip.phase === "AWAITING_BUY" && latestSolUsd !== undefined
+          ? computePortfolioTradeUsd(latestSolBalance, config.trade.minSolReserve, latestSolUsd, config.trade.sizePercent)
+          : undefined,
       lastEvent: lastEvent ? { message: lastEvent.message, ageMs: Date.now() - lastEvent.atMs } : undefined,
       lastErrorMessage,
     };
