@@ -16,6 +16,8 @@ import {
   isSellSignal,
   isStopLossTriggered,
   isTrailingStopTriggered,
+  isWithinBreakoutBuyBand,
+  isWithinTrailingStopBand,
   sellTargetPrice,
   updateBreakoutPeak,
   updatePeakPrice,
@@ -339,20 +341,46 @@ async function main() {
    * long before actually reporting it as triggered.
    */
   function checkTrailingStopWithConfirmation(slotKey: SlotKey, flip: FlipState, currentPriceUsd: number): boolean {
-    const rawHit =
-      config.strategy.trailingStopEnabled &&
-      isTrailingStopTriggered(flip, currentPriceUsd, config.strategy.trailingStopArmPercent, config.strategy.trailingStopPercent);
+    if (!config.strategy.trailingStopEnabled) {
+      trailingStopPendingSinceMs[slotKey] = null;
+      return false;
+    }
 
-    if (!rawHit) {
+    // The real trigger decides whether we're allowed to fire at all. The
+    // (looser) band decides whether the confirmation timer keeps running -
+    // a tick that bounces back a fraction of a percent within the band
+    // doesn't reset the whole countdown to zero, only a real move back out
+    // of it does.
+    const trulyTriggered = isTrailingStopTriggered(
+      flip,
+      currentPriceUsd,
+      config.strategy.trailingStopArmPercent,
+      config.strategy.trailingStopPercent,
+    );
+    const withinBand = isWithinTrailingStopBand(
+      flip,
+      currentPriceUsd,
+      config.strategy.trailingStopArmPercent,
+      config.strategy.trailingStopPercent,
+      config.strategy.trailingStopConfirmationTolerancePercent,
+    );
+
+    if (!withinBand) {
       trailingStopPendingSinceMs[slotKey] = null;
       return false;
     }
 
     const confirmationMs = config.strategy.trailingStopConfirmationMs;
-    if (confirmationMs <= 0) return true;
-
     const pendingSince = trailingStopPendingSinceMs[slotKey] ?? Date.now();
     trailingStopPendingSinceMs[slotKey] = pendingSince;
+
+    if (!trulyTriggered) {
+      // Still just inside the tolerance band (a small bounce) - keep the
+      // timer alive but don't fire yet.
+      return false;
+    }
+    if (confirmationMs <= 0) return true;
+
     const heldForMs = Date.now() - pendingSince;
     if (heldForMs < confirmationMs) {
       if (config.log.logSkips) {
@@ -478,17 +506,27 @@ async function main() {
 
   /** Same noise-filtering shape as checkTrailingStopWithConfirmation, for the breakout buy. */
   function checkBreakoutBuyWithConfirmation(flip: FlipState, currentPriceUsd: number): boolean {
-    const rawHit = isBreakoutBuySignal(flip, currentPriceUsd, computeCurrentBreakoutPullbackPercent());
-    if (!rawHit) {
+    const pullbackPercent = computeCurrentBreakoutPullbackPercent();
+    const trulyTriggered = isBreakoutBuySignal(flip, currentPriceUsd, pullbackPercent);
+    const withinBand = isWithinBreakoutBuyBand(
+      flip,
+      currentPriceUsd,
+      pullbackPercent,
+      config.strategy.breakoutBuyConfirmationTolerancePercent,
+    );
+
+    if (!withinBand) {
       breakoutBuyPendingSinceMs = null;
       return false;
     }
 
     const confirmationMs = config.strategy.breakoutBuyConfirmationMs;
-    if (confirmationMs <= 0) return true;
-
     const pendingSince = breakoutBuyPendingSinceMs ?? Date.now();
     breakoutBuyPendingSinceMs = pendingSince;
+
+    if (!trulyTriggered) return false;
+    if (confirmationMs <= 0) return true;
+
     const heldForMs = Date.now() - pendingSince;
     if (heldForMs < confirmationMs) {
       if (config.log.logSkips) {

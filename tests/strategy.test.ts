@@ -10,6 +10,8 @@ import {
   isSellSignal,
   isStopLossTriggered,
   isTrailingStopTriggered,
+  isWithinBreakoutBuyBand,
+  isWithinTrailingStopBand,
   rebuyTriggerPrice,
   sellTargetPrice,
   updateBreakoutPeak,
@@ -176,6 +178,13 @@ describe("trailing stop", () => {
   it("does nothing while flat", () => {
     expect(isTrailingStopTriggered(initialFlipState(), 1.0, 4, 2)).toBe(false);
   });
+
+  it("the confirmation band fires earlier than the real trigger (trailPercent - tolerance), so a tick past the band but short of the real trigger still keeps the timer alive", () => {
+    const state = updatePeakPrice(opened, 1.05); // armed at +5%, trailPercent=2, tolerance=0.5 -> band triggers at -1.5% from peak
+    expect(isTrailingStopTriggered(state, 1.0311, 4, 2)).toBe(false); // -1.8% from peak: not the real trigger yet (needs -2%)
+    expect(isWithinTrailingStopBand(state, 1.0311, 4, 2, 0.5)).toBe(true); // ...but past the band, so the confirmation clock keeps running
+    expect(isWithinTrailingStopBand(state, 1.0395, 4, 2, 0.5)).toBe(false); // -1.0% from peak: not even into the band yet
+  });
 });
 
 describe("breakout buy (opt-in)", () => {
@@ -208,6 +217,13 @@ describe("breakout buy (opt-in)", () => {
 
   it("does not signal without a real breakout peak above lastSellPrice", () => {
     expect(isBreakoutBuySignal(afterASale, 1.05, 3)).toBe(false); // no peak tracked yet
+  });
+
+  it("the confirmation band fires earlier than the real signal, keeping the timer alive short of the real threshold", () => {
+    const state = updateBreakoutPeak(afterASale, 1.15); // pullbackPercent=3, tolerance=0.5 -> band at -2.5% from peak
+    expect(isBreakoutBuySignal(state, 1.11895, 3)).toBe(false); // -2.7% from peak: not the real signal yet (needs -3%)
+    expect(isWithinBreakoutBuyBand(state, 1.11895, 3, 0.5)).toBe(true); // ...but past the band, clock keeps running
+    expect(isWithinBreakoutBuyBand(state, 1.127, 3, 0.5)).toBe(false); // -2.0% from peak: not even into the band yet
   });
 
   it("signals once price falls pullbackPercent below the breakout peak", () => {

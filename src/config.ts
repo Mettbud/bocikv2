@@ -106,6 +106,14 @@ const envSchema = z.object({
   // actually fires, filtering out one-tick noise. 0 = fire immediately,
   // same as before this setting existed.
   TRAILING_STOP_CONFIRMATION_MS: numeric(4000),
+  // On a volatile token, requiring the pullback to hold EXACTLY past the
+  // trigger on every single tick rarely survives 4 seconds - one tick
+  // ticking back a fraction of a percent resets the whole timer to zero.
+  // This tolerance loosens the trigger by this many percentage points
+  // *only* for the purpose of keeping the confirmation timer alive (not
+  // for the actual sell decision, which still needs the real, un-loosened
+  // trigger) - so a small bounce within the band doesn't restart the clock.
+  TRAILING_STOP_CONFIRMATION_TOLERANCE_PERCENT: numeric(0.5),
   // Opt-in, OFF by default - Slot A's normal rule is "never buy above
   // lastSellPrice". If a token just keeps running up without ever dipping
   // back to it, Slot A stays in cash and misses the whole move. When
@@ -121,6 +129,9 @@ const envSchema = z.object({
   BREAKOUT_BUY_MIN_PERCENT: numeric(2),
   BREAKOUT_BUY_MAX_PERCENT: numeric(10),
   BREAKOUT_BUY_CONFIRMATION_MS: numeric(4000),
+  // Same tolerance-band idea as TRAILING_STOP_CONFIRMATION_TOLERANCE_PERCENT,
+  // applied to the breakout-buy pullback confirmation.
+  BREAKOUT_BUY_CONFIRMATION_TOLERANCE_PERCENT: numeric(0.5),
 
   MAX_SLIPPAGE_BPS: numeric(150),
   MAX_PRICE_IMPACT_BPS: numeric(250),
@@ -194,11 +205,13 @@ function buildConfig(env: z.infer<typeof envSchema>) {
       trailingStopArmPercent: env.TRAILING_STOP_ARM_PERCENT,
       trailingStopPercent: env.TRAILING_STOP_PERCENT,
       trailingStopConfirmationMs: env.TRAILING_STOP_CONFIRMATION_MS,
+      trailingStopConfirmationTolerancePercent: env.TRAILING_STOP_CONFIRMATION_TOLERANCE_PERCENT,
       breakoutBuyEnabled: env.BREAKOUT_BUY_ENABLED,
       breakoutBuyMultiplier: env.BREAKOUT_BUY_MULTIPLIER,
       breakoutBuyMinPercent: env.BREAKOUT_BUY_MIN_PERCENT,
       breakoutBuyMaxPercent: env.BREAKOUT_BUY_MAX_PERCENT,
       breakoutBuyConfirmationMs: env.BREAKOUT_BUY_CONFIRMATION_MS,
+      breakoutBuyConfirmationTolerancePercent: env.BREAKOUT_BUY_CONFIRMATION_TOLERANCE_PERCENT,
     },
     execution: {
       maxSlippageBps: env.MAX_SLIPPAGE_BPS,

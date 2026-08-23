@@ -179,11 +179,20 @@ poniżej $Y` albo `nieuzbrojony (szczyt $X, jeszcze za mało zysku)`. Wyłącz
 `PRICE_POLL_INTERVAL_MS`, domyślnie 5s) - chwilowy spike/knot ustawia
 szczyt tak samo jak prawdziwy ruch. Żeby pojedynczy szum nie wywoływał
 przedwczesnej sprzedaży, `TRAILING_STOP_CONFIRMATION_MS` (domyślnie 4000)
-wymaga, żeby cofnięcie od szczytu utrzymało się **nieprzerwanie** przez
-tyle milisekund (kilka ticków z rzędu), zanim bot faktycznie sprzeda -
-dokładnie ten sam mechanizm co `STOP_CONFIRMATION_MS` w oryginalnym
-`botrade`. Ustaw na `0`, żeby sprzedawać natychmiast przy pierwszym ticku
-spełniającym warunek.
+wymaga, żeby cofnięcie od szczytu utrzymało się przez tyle milisekund
+(kilka ticków z rzędu), zanim bot faktycznie sprzeda - dokładnie ten sam
+mechanizm co `STOP_CONFIRMATION_MS` w oryginalnym `botrade`. Ustaw na `0`,
+żeby sprzedawać natychmiast przy pierwszym ticku spełniającym warunek.
+
+Na bardzo zmiennym tokenie wymóg "dokładnie za progiem na **każdym** ticku
+bez wyjątku" bywa zbyt sztywny - jeden tick cofający się o ułamek procenta
+zerowałby cały licznik od nowa, więc 4 sekundy praktycznie nigdy by nie
+minęły. `TRAILING_STOP_CONFIRMATION_TOLERANCE_PERCENT` (domyślnie 0.5)
+rozwiązuje to: licznik nie zeruje się, dopóki cena nie odbije więcej niż o
+ten % od progu - drobne odbicie w tym paśmie nie przerywa odliczania.
+Prawdziwa sprzedaż nadal wymaga przejścia przez **właściwy, nierozluźniony**
+próg `TRAILING_STOP_PERCENT` - tolerancja wpływa tylko na to, czy licznik
+czasu żyje dalej, nie na to, czy bot faktycznie sprzeda.
 
 ## Dwa sloty: Slot A + Slot B jako "dobicie"
 

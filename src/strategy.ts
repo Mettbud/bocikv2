@@ -225,6 +225,34 @@ export function isBreakoutBuySignal(
   return dropFromPeakPercent <= -pullbackPercent;
 }
 
+/**
+ * Same threshold-crossing shape as `isTrailingStopTriggered`, but against a
+ * *looser* trailPercent (trailPercent - tolerancePercent). Used only to
+ * decide whether a confirmation timer should keep counting through a single
+ * noisy tick that bounced slightly back above the real trigger, instead of
+ * resetting to zero - the actual sell still requires
+ * `isTrailingStopTriggered` (the real, un-loosened threshold) to be true.
+ */
+export function isWithinTrailingStopBand(
+  state: FlipState,
+  currentPrice: number,
+  armPercent: number,
+  trailPercent: number,
+  tolerancePercent: number,
+): boolean {
+  return isTrailingStopTriggered(state, currentPrice, armPercent, Math.max(0, trailPercent - tolerancePercent));
+}
+
+/** Same idea as `isWithinTrailingStopBand`, for the breakout-buy pullback. */
+export function isWithinBreakoutBuyBand(
+  state: FlipState,
+  currentPrice: number,
+  pullbackPercent: number,
+  tolerancePercent: number,
+): boolean {
+  return isBreakoutBuySignal(state, currentPrice, Math.max(0, pullbackPercent - tolerancePercent));
+}
+
 export function afterBuy(
   state: FlipState,
   fillPrice: number,
