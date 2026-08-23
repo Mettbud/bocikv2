@@ -114,6 +114,11 @@ async function main() {
   const trailingStopPendingSinceMs: Record<SlotKey, number | null> = { A: null, B: null, C: null };
   // Same confirmation pattern, for the opt-in breakout buy - Slot A only.
   let breakoutBuyPendingSinceMs: number | null = null;
+  // When did peakPriceUsd last actually make a new high, for each slot?
+  // Drives TRAILING_STOP_STAGNATION_MS - null while flat. Not persisted
+  // (like the pending timers above), so a restart just starts the clock
+  // over rather than misfiring on stale data.
+  const peakUpdatedAtMs: Record<SlotKey, number | null> = { A: null, B: null, C: null };
 
   const setEvent = (message: string) => {
     lastEvent = { message, atMs: Date.now() };
@@ -294,9 +299,12 @@ async function main() {
   /** Live-quotes the sell leg every tick while in position - drives both the
    *  dashboard's live PnL and the actual sell decision, off the same quote. */
   async function evaluatePosition(slotKey: SlotKey, currentPriceUsd: number, solUsd: number): Promise<void> {
-    // Keep the recorded peak current before anything else checks it.
+    // Keep the recorded peak current before anything else checks it, and
+    // note WHEN it last actually moved - drives TRAILING_STOP_STAGNATION_MS.
+    const peakBefore = getFlip(slotKey).peakPriceUsd;
     setFlip(slotKey, updatePeakPrice(getFlip(slotKey), currentPriceUsd));
     const flip = getFlip(slotKey);
+    if (flip.peakPriceUsd !== peakBefore) peakUpdatedAtMs[slotKey] = Date.now();
     if (flip.buyPrice === null || flip.entryCost === null) return;
 
     // Our own bookkeeping is authoritative for how much THIS slot holds -
@@ -350,13 +358,18 @@ async function main() {
     // confirmed pullback from a real peak instead of waiting forever. Still
     // has to clear MIN_NET_PROFIT_PERCENT below, same as a normal target hit.
     const trailingStopHit = checkTrailingStopWithConfirmation(slotKey, flip, currentPriceUsd);
+    // Armed but chopping sideways forever - never a new high (trailing stop
+    // keeps waiting) and never a real pullback either (it never fires).
+    // Opt-in (TRAILING_STOP_STAGNATION_MS): sell at the current price
+    // instead of circling in place, still gated by MIN_NET_PROFIT_PERCENT.
+    const stagnationHit = checkTrailingStopStagnation(slotKey, flip);
 
-    if (!targetHit && !trailingStopHit) return;
+    if (!targetHit && !trailingStopHit && !stagnationHit) return;
 
     if (net < config.strategy.minNetProfitPercent) {
       if (config.log.logSkips) {
         log.info(`Slot ${slotKey}: sell considered but net profit after costs is too thin - holding for a better fill`, {
-          reason: targetHit ? "target hit" : "trailing stop pullback",
+          reason: targetHit ? "target hit" : trailingStopHit ? "trailing stop pullback" : "trailing stop stagnation",
           grossMovePercent: round2(gross),
           estimatedRoundTripCostPercent: round2(cost.totalPercent),
           netProfitPercent: round2(net),
@@ -366,7 +379,32 @@ async function main() {
       return;
     }
 
-    await fillSell(slotKey, sell, tokenAmount, solUsd, gross, cost.totalPercent, net, targetHit ? "AUTO" : "TRAILING_STOP");
+    await fillSell(
+      slotKey,
+      sell,
+      tokenAmount,
+      solUsd,
+      gross,
+      cost.totalPercent,
+      net,
+      targetHit ? "AUTO" : trailingStopHit ? "TRAILING_STOP" : "STAGNATION",
+    );
+  }
+
+  /**
+   * TRAILING_STOP_STAGNATION_MS (0 = disabled): once armed, if the peak
+   * hasn't made a new high for this long, stop waiting for either a full
+   * target or a real trailing-stop pullback and just sell at the current
+   * price - it's already a real gain (ARM_PERCENT), just not moving.
+   */
+  function checkTrailingStopStagnation(slotKey: SlotKey, flip: FlipState): boolean {
+    if (!config.strategy.trailingStopEnabled || config.strategy.trailingStopStagnationMs <= 0) return false;
+    if (flip.buyPrice === null || flip.peakPriceUsd === null) return false;
+    const { armPercent } = trailingStopParamsFor(slotKey);
+    if (grossMovePercent(flip.buyPrice, flip.peakPriceUsd) < armPercent) return false;
+    const updatedAt = peakUpdatedAtMs[slotKey];
+    if (updatedAt === null) return false;
+    return Date.now() - updatedAt >= config.strategy.trailingStopStagnationMs;
   }
 
   /**
@@ -693,6 +731,8 @@ async function main() {
       ),
     );
     if (slotKey === "A") breakoutBuyPendingSinceMs = null;
+    // Peak starts at the fill price (see afterBuy) - count that as its first "update".
+    peakUpdatedAtMs[slotKey] = Date.now();
     saveState(config, s);
 
     const msg = `BUY [Slot ${slotKey}] ${fill.outputAmountUi.toFixed(4)} ${config.token.symbol} @ ${fillPriceUsd.toFixed(8)} (~$${usdAmount.toFixed(2)})`;
@@ -789,7 +829,7 @@ async function main() {
     gross: number,
     roundTripCostPercent: number,
     net: number,
-    tag: "AUTO" | "MANUAL" | "PANIC" | "STOP_LOSS" | "TRAILING_STOP",
+    tag: "AUTO" | "MANUAL" | "PANIC" | "STOP_LOSS" | "TRAILING_STOP" | "STAGNATION",
     percentOfPosition = 100,
   ): Promise<void> {
     const flip = getFlip(slotKey);
@@ -812,6 +852,7 @@ async function main() {
     if (closingPosition) {
       setFlip(slotKey, afterSell(flip, fillPriceUsd));
       trailingStopPendingSinceMs[slotKey] = null;
+      peakUpdatedAtMs[slotKey] = null;
     } else {
       setFlip(slotKey, { ...flip, tokenAmount: (flip.tokenAmount ?? tokenAmount) - tokenAmount });
     }
@@ -827,9 +868,11 @@ async function main() {
         ? "SELL (stop loss)"
         : tag === "TRAILING_STOP"
           ? "SELL (trailing stop)"
-          : tag === "PANIC"
-            ? "SELL (panic)"
-            : "SELL";
+          : tag === "STAGNATION"
+            ? "SELL (stagnant - locking in profit)"
+            : tag === "PANIC"
+              ? "SELL (panic)"
+              : "SELL";
     const msg = `${label} [Slot ${slotKey}] ${tokenAmount.toFixed(4)} ${config.token.symbol} @ ${fillPriceUsd.toFixed(8)} (net ${net.toFixed(2)}% / ${usdSigned(realizedThisTrade)})`;
     setEvent(msg);
     log.info(msg, {

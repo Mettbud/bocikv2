@@ -149,6 +149,17 @@ const envSchema = z.object({
   // for the actual sell decision, which still needs the real, un-loosened
   // trigger) - so a small bounce within the band doesn't restart the clock.
   TRAILING_STOP_CONFIRMATION_TOLERANCE_PERCENT: numeric(0.5),
+  // Opt-in, OFF by default (0). Once a position is armed (already past
+  // TRAILING_STOP_ARM_PERCENT gain), it can still get stuck chopping
+  // sideways near its high forever - never making a new peak (so the
+  // trailing stop keeps waiting) but never falling TRAILING_STOP_PERCENT
+  // below it either (so it never actually fires). When > 0: if the peak
+  // hasn't made a new high for this many ms while armed, sell at the
+  // current price instead of waiting indefinitely - still has to clear
+  // MIN_NET_PROFIT_PERCENT like every other sell, so this only ever
+  // realizes a position that's genuinely still profitable, just refuses to
+  // keep circling in place for one that already is.
+  TRAILING_STOP_STAGNATION_MS: numeric(0),
   // Opt-in, OFF by default - Slot A's normal rule is "never buy above
   // lastSellPrice". If a token just keeps running up without ever dipping
   // back to it, Slot A stays in cash and misses the whole move. When
@@ -250,6 +261,7 @@ function buildConfig(env: z.infer<typeof envSchema>) {
       slotCTrailingStopPercent: env.SLOT_C_TRAILING_STOP_PERCENT,
       trailingStopConfirmationMs: env.TRAILING_STOP_CONFIRMATION_MS,
       trailingStopConfirmationTolerancePercent: env.TRAILING_STOP_CONFIRMATION_TOLERANCE_PERCENT,
+      trailingStopStagnationMs: env.TRAILING_STOP_STAGNATION_MS,
       breakoutBuyEnabled: env.BREAKOUT_BUY_ENABLED,
       breakoutBuyMultiplier: env.BREAKOUT_BUY_MULTIPLIER,
       breakoutBuyMinPercent: env.BREAKOUT_BUY_MIN_PERCENT,

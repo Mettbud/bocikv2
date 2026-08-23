@@ -194,6 +194,18 @@ Prawdziwa sprzedaż nadal wymaga przejścia przez **właściwy, nierozluźniony*
 próg `TRAILING_STOP_PERCENT` - tolerancja wpływa tylko na to, czy licznik
 czasu żyje dalej, nie na to, czy bot faktycznie sprzeda.
 
+**Uzbrojona pozycja, która koczuje w miejscu:** raz uzbrojony trailing stop
+czeka na jedno z dwóch: nowy szczyt (dalej podąża w górę) albo realny spadek
+`TRAILING_STOP_PERCENT` od szczytu (sprzedaje). Token, który po prostu
+chodzi w wąskim paśmie tuż pod szczytem - bez nowych maksimów, ale też bez
+spadku wystarczająco głębokiego, żeby odpalić sprzedaż - może tak stać
+bardzo długo. Opcjonalne (WYŁĄCZONE domyślnie, `TRAILING_STOP_STAGNATION_MS=0`):
+gdy > 0, jeśli szczyt nie zrobił nowego maksimum przez tyle ms, bot
+przestaje czekać i sprzedaje po aktualnej cenie - nadal musi przejść przez
+`MIN_NET_PROFIT_PERCENT`, więc to tylko realizuje zysk, który już faktycznie
+jest, zamiast pozwolić mu bez końca "kręcić się w kółko". Np.
+`TRAILING_STOP_STAGNATION_MS=600000` (10 minut).
+
 **Wąskie, boczne pasmo pod wodą - luka, na którą trailing stop nie
 pomaga:** trailing stop chroni zysk dopiero gdy pozycja realnie weszła na
 plus (`TRAILING_STOP_ARM_PERCENT`). Jeśli cena kilkadziesiąt minut kręci
