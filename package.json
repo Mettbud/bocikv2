@@ -10,6 +10,7 @@
   },
   "scripts": {
     "bot": "tsx src/index.ts",
+    "bot:all": "powershell -ExecutionPolicy Bypass -File scripts/start-all.ps1",
     "analyze": "tsx scripts/analyzeVolatility.ts",
     "test": "vitest run",
     "test:watch": "vitest",

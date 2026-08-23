@@ -449,6 +449,25 @@ $env:DOTENV_CONFIG_PATH=".env.b"; npm run bot
 $env:DOTENV_CONFIG_PATH=".env.c"; npm run bot
 ```
 
+Na Windows jest też skrypt, który odpala wszystkie skonfigurowane wersje
+naraz (A, B, i C jeśli `.env.c` istnieje), każdą w osobnym oknie, jedną
+komendą:
+
+```powershell
+npm run bot:all
+```
+
+Dashboard każdej wersji co sekundę czyści i przerysowuje cały ekran, więc
+trzy instancje **nie mogą** dzielić jednego okna terminala - stąd trzy
+osobne okna, nie trzy panele w jednym. Jeśli chcesz wpisywać jedną komendę
+(np. `panic`) i mieć ją wysłaną do wszystkich naraz, Windows Terminal ma to
+wbudowane: zaznacz wszystkie trzy okna jako panele w jednym oknie Windows
+Terminal (przeciągnij, albo `Shift+Alt+D`), potem prawym przyciskiem na
+pasku zakładek → **"Toggle broadcast input"** (albo z palety poleceń,
+`Ctrl+Shift+P` → "Toggle broadcast input") - to, co wpiszesz, trafia do
+wszystkich zaznaczonych paneli jednocześnie, a każdy z nich nadal rysuje
+swój własny dashboard bez konfliktu.
+
 Po kilku godzinach porównaj `data/trades.csv`, `data/trades-b.csv` i
 `data/trades-c.csv` - liczba flipów, zrealizowany PnL, ile razy trailing
 stop faktycznie zadziałał vs. ile razy był to fałszywy alarm odfiltrowany
