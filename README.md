@@ -103,9 +103,17 @@ npm run analyze                          # zbiera 15 minut próbek
 ANALYZE_DURATION_MINUTES=60 npm run analyze   # dłuższa, dokładniejsza próbka
 ```
 
-Skrypt (`scripts/analyzeVolatility.ts`) pyta o **prawdziwą cenę CYBERLEEK z
+Skrypt (`scripts/analyzeVolatility.ts`) najpierw pokazuje **historię** -
+Jupiter nie ma endpointu z przeszłością (umie odpowiedzieć tylko "jaka jest
+cena teraz"), więc na start pyta darmowe API DexScreener o zmianę ceny z
+ostatnich 5 min / 1h / 6h / 24h, wolumen i płynność puli - to jedyny sposób,
+żeby zobaczyć coś sprzed uruchomienia skryptu, bez czekania.
+
+Potem przechodzi do pomiaru **na żywo**: pyta o **prawdziwą cenę CYBERLEEK z
 Jupitera** co `PRICE_POLL_INTERVAL_MS` (dokładnie tak samo jak robi to bot
-podczas handlu) i po zebraniu próbek pokazuje:
+podczas handlu) przez `ANALYZE_DURATION_MINUTES` (domyślnie 15 min - kończy
+się samo, albo przerwij Ctrl+C w dowolnym momencie i tak zobaczysz raport z
+tego, co zdążyło się zebrać). Po zebraniu próbek pokazuje:
 
 - ile realnie porusza się cena w oknach 5s/15s/30s/1min/5min (średnia,
   mediana, max w górę, max w dół),
@@ -114,7 +122,6 @@ podczas handlu) i po zebraniu próbek pokazuje:
 - zestawienie z aktualnym `TARGET_GAIN_PERCENT`, żeby było widać, czy cel
   jest w ogóle realistyczny dla tego, jak ten konkretny token się zachowuje.
 
-Ctrl+C w trakcie zbierania i tak pokaże analizę tego, co zdążyło się zebrać.
 To jest szacunek (memecoiny ruszają się "skokowo", nie jak czysty random
 walk), ale dużo lepszy punkt startowy niż zgadywanie.
 
@@ -151,6 +158,7 @@ src/
   ledger.ts      - trwały stan (data/state.json) + log transakcji (data/trades.csv)
   wallet.ts       - wczytanie klucza portfela (tylko tryb live)
   sizing.ts       - wielkość automatycznego kupna jako % salda
+  dexscreener.ts  - historyczna zmiana ceny (5m/1h/6h/24h) dla scripts/analyzeVolatility.ts
   cli/
     format.ts     - kolory/formatowanie liczb w terminalu
     dashboard.ts  - czyste renderowanie ekranu stanu (testowalne bez I/O)

@@ -3,20 +3,26 @@ import { PublicKey } from "@solana/web3.js";
 import { loadConfig, type BotConfig } from "../src/config.js";
 import { JupiterClient } from "../src/jupiter.js";
 import { getConnection, getMintDecimals, SolPriceTracker } from "../src/chain.js";
+import { fetchDexScreenerSnapshot } from "../src/dexscreener.js";
 
 /**
  * Standalone market-analysis tool - answers the actual question before you
  * tune TARGET_GAIN_PERCENT / MIN_NET_PROFIT_PERCENT by guessing: "how much
  * does this token realistically move, and over what time?"
  *
- * Polls the live price at the bot's own PRICE_POLL_INTERVAL_MS for
- * ANALYZE_DURATION_MINUTES (default 15), then reports how much the price
- * actually moved over several windows (5s/15s/30s/1min/5min) and estimates
- * how long a move of TARGET_GAIN_PERCENT realistically takes, given the
- * volatility just measured.
+ * Two layers of data:
+ *   1. Instant: a DexScreener snapshot with price change over the last
+ *      5m/1h/6h/24h - Jupiter has no history endpoint, so this is the only
+ *      way to see the recent past without having already been polling.
+ *   2. Live: polls the price at the bot's own PRICE_POLL_INTERVAL_MS for
+ *      ANALYZE_DURATION_MINUTES (default 15, Ctrl+C to stop early and still
+ *      see the report on whatever was collected), then reports how much the
+ *      price actually moved over 5s/15s/30s/1min/5min windows and estimates
+ *      how long a move of TARGET_GAIN_PERCENT realistically takes, given the
+ *      volatility just measured.
  *
  * Run it with: npm run analyze
- *   ANALYZE_DURATION_MINUTES=60 npm run analyze   # longer sample
+ *   ANALYZE_DURATION_MINUTES=60 npm run analyze   # longer live sample
  */
 
 interface Sample {
@@ -25,6 +31,44 @@ interface Sample {
 }
 
 const DURATION_MINUTES = Number(process.env.ANALYZE_DURATION_MINUTES ?? 15);
+
+/**
+ * Jupiter can't answer "what did the price do an hour ago" - this is the
+ * only piece of this tool that looks at the actual past, via DexScreener's
+ * free public API. Best-effort: DexScreener not having this pair indexed,
+ * or being unreachable, should never block the live measurement below.
+ */
+async function printHistoricalSnapshot(config: BotConfig): Promise<void> {
+  console.log(`Historia (DexScreener) dla ${config.token.symbol}:\n`);
+  try {
+    const snapshot = await fetchDexScreenerSnapshot(config.token.mint);
+    if (!snapshot) {
+      console.log("  brak danych - token jeszcze nie zaindeksowany na DexScreener.\n");
+      return;
+    }
+    const c = snapshot.priceChangePercent;
+    console.log(`  cena teraz:        ${snapshot.priceUsd !== undefined ? `$${snapshot.priceUsd}` : "-"}`);
+    console.log(`  zmiana 5 min:      ${histPct(c.m5)}`);
+    console.log(`  zmiana 1 godz.:    ${histPct(c.h1)}`);
+    console.log(`  zmiana 6 godz.:    ${histPct(c.h6)}`);
+    console.log(`  zmiana 24 godz.:   ${histPct(c.h24)}`);
+    console.log(`  wolumen 24h:       ${snapshot.volumeUsd24h !== undefined ? `$${snapshot.volumeUsd24h.toLocaleString()}` : "-"}`);
+    console.log(`  płynność puli:     ${snapshot.liquidityUsd !== undefined ? `$${snapshot.liquidityUsd.toLocaleString()}` : "-"} (${snapshot.dexId ?? "?"})`);
+    console.log(
+      "\n  To są RUCHY NETTO w te okna (np. +8% w 1h może kryć w sobie ruch\n" +
+        "  +15% i potem -6%) - dobre do wyczucia trendu, ale nie zastępuje\n" +
+        "  pomiaru poniżej, który mierzy faktyczne wahania krok po kroku.\n",
+    );
+  } catch (err) {
+    console.log(`  nie udało się pobrać (pomijam, to tylko dodatkowy kontekst): ${String(err)}\n`);
+  }
+}
+
+function histPct(value: number | undefined): string {
+  if (value === undefined || !Number.isFinite(value)) return "-";
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${value.toFixed(2)}%`;
+}
 
 async function main() {
   const config = loadConfig();
@@ -35,12 +79,15 @@ async function main() {
   const tokenDecimals = await getMintDecimals(connection, tokenMint);
   const solDecimals = 9;
 
+  await printHistoricalSnapshot(config);
+
   const samples: Sample[] = [];
   const endAtMs = Date.now() + DURATION_MINUTES * 60_000;
 
   console.log(
-    `Zbieram cenę ${config.token.symbol} przez ${DURATION_MINUTES} min, co ${config.pricePollIntervalMs}ms ` +
-      `(Ctrl+C żeby przerwać wcześniej i i tak zobaczyć wynik na zebranych próbkach)...\n`,
+    `Zbieram cenę ${config.token.symbol} NA ŻYWO przez ${DURATION_MINUTES} min, co ${config.pricePollIntervalMs}ms.\n` +
+      `Skończy się samo po tym czasie - albo wciśnij Ctrl+C w dowolnym momencie, żeby przerwać\n` +
+      `wcześniej i i tak zobaczyć raport z tego, co zdążyło się zebrać.\n`,
   );
 
   process.on("SIGINT", () => {
