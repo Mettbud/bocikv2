@@ -4,8 +4,9 @@
 #   .\scripts\start-all.ps1
 #
 # Odpala A i B zawsze; C tylko jeśli .env.c istnieje (nie każdy testuje
-# Slot C). Każde okno samo robi `cd` do katalogu projektu, więc możesz
-# odpalić ten skrypt z dowolnego miejsca.
+# Slot C). Każde okno samo ustawia swój katalog roboczy, więc możesz
+# odpalić ten skrypt z dowolnego miejsca - działa też gdy ścieżka do
+# projektu zawiera spacje.
 
 $ErrorActionPreference = "Stop"
 $projectDir = Split-Path -Parent $PSScriptRoot
@@ -13,15 +14,22 @@ $projectDir = Split-Path -Parent $PSScriptRoot
 function Start-BotWindow {
     param(
         [string]$Title,
-        [string]$EnvPath  # $null / pusty = domyślny .env
+        [string]$EnvPath  # pusty = domyślny .env
     )
-    $envSet = if ($EnvPath) { "`$env:DOTENV_CONFIG_PATH=`"$EnvPath`"; " } else { "" }
-    $command = "cd `"$projectDir`"; `$host.UI.RawUI.WindowTitle = `"$Title`"; ${envSet}npm run bot"
-    Start-Process powershell -ArgumentList "-NoExit", "-Command", $command
+    # Same pojedyncze cudzysłowy w treści komendy (nie podwójne) - unika
+    # problemów z zagnieżdżonym cytowaniem, gdy Start-Process buduje
+    # linię poleceń dla nowego procesu.
+    $lines = @("`$host.UI.RawUI.WindowTitle = '$Title'")
+    if ($EnvPath) {
+        $lines += "`$env:DOTENV_CONFIG_PATH = '$EnvPath'"
+    }
+    $lines += "npm run bot"
+    $command = $lines -join "; "
+    Start-Process powershell -WorkingDirectory $projectDir -ArgumentList "-NoExit", "-Command", $command
 }
 
 Write-Host "Startuje Slot A (.env)..."
-Start-BotWindow -Title "bocik - wersja A" -EnvPath $null
+Start-BotWindow -Title "bocik - wersja A" -EnvPath ""
 
 Start-Sleep -Seconds 1
 Write-Host "Startuje wersje B (.env.b)..."
