@@ -41,12 +41,16 @@ async function readJsonBody(req: import("node:http").IncomingMessage): Promise<u
 // keeps this from becoming an open CORS endpoint any website could hit.
 const LOCALHOST_ORIGIN = /^http:\/\/(127\.0\.0\.1|localhost):\d+$/;
 
-function applyCors(req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse): void {
+function applyCors(
+  req: import("node:http").IncomingMessage,
+  res: import("node:http").ServerResponse,
+  allowCommands: boolean,
+): void {
   const origin = req.headers.origin;
   if (origin && LOCALHOST_ORIGIN.test(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Vary", "Origin");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Methods", allowCommands ? "GET, POST, OPTIONS" : "GET, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   }
 }
@@ -54,7 +58,7 @@ function applyCors(req: import("node:http").IncomingMessage, res: import("node:h
 /** The bare HTTP server, with no listening/logging wired up - split out so tests can drive it on an ephemeral port. */
 export function createDashboardHttpServer(getSnapshot: () => DashboardState, deps: CommandDeps): Server {
   return createServer((req, res) => {
-    applyCors(req, res);
+    applyCors(req, res, true);
     if (req.method === "OPTIONS") {
       res.writeHead(204);
       res.end();
@@ -94,6 +98,35 @@ export function createDashboardHttpServer(getSnapshot: () => DashboardState, dep
   });
 }
 
+/**
+ * A genuinely read-only sibling server: it serves snapshots and HTML but has
+ * no route that reaches CommandDeps/handleLine. This is intentionally a
+ * separate port, so hiding buttons in the browser cannot be bypassed by
+ * manually POSTing to the control dashboard's command endpoint.
+ */
+export function createReadOnlyDashboardHttpServer(getSnapshot: () => DashboardState): Server {
+  return createServer((req, res) => {
+    applyCors(req, res, false);
+    if (req.method === "OPTIONS") {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+    if (req.method === "GET" && req.url === "/api/state") {
+      res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify(getSnapshot()));
+      return;
+    }
+    if (req.method === "GET" && (req.url === "/" || req.url === "/index.html")) {
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(readOnlyPageHtml());
+      return;
+    }
+    res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+    res.end("not found");
+  });
+}
+
 export function startWebDashboard(
   getSnapshot: () => DashboardState,
   deps: CommandDeps,
@@ -114,6 +147,38 @@ export function startWebDashboard(
   });
 
   return { close: () => server.close() };
+}
+
+export function startReadOnlyWebDashboard(
+  getSnapshot: () => DashboardState,
+  port: number,
+  logger: Logger,
+): { close: () => void } {
+  const server = createReadOnlyDashboardHttpServer(getSnapshot);
+
+  server.on("error", (err) => {
+    logger.warn("read-only web dashboard failed to start - continuing without it", {
+      error: String((err as Error).message ?? err),
+      port,
+    });
+  });
+
+  server.listen(port, "127.0.0.1", () => {
+    logger.info(`read-only web dashboard listening at http://127.0.0.1:${port} (localhost only)`);
+  });
+
+  return { close: () => server.close() };
+}
+
+function readOnlyPageHtml(): string {
+  return PAGE_HTML
+    .replace("<body>", '<body class="read-only">')
+    .replace("<h1>bocik</h1>", "<h1>bocik — podgląd tylko</h1>")
+    .replace("const READ_ONLY = false;", "const READ_ONLY = true;")
+    .replace(
+      "const peerPorts = { b: 4174, c: 4175, ...savedPeerPorts };",
+      "const peerPorts = { b: 4274, c: 4275, ...savedPeerPorts };",
+    );
 }
 
 const PAGE_HTML = `<!doctype html>
@@ -248,6 +313,8 @@ function row(label, valueHtml) {
   return '<div class="row"><span class="label">' + label + ':</span><span>' + valueHtml + "</span></div>";
 }
 
+const READ_ONLY = false;
+
 const slotCollapsed = JSON.parse(localStorage.getItem("bocik.slotCollapsed") || "{}");
 const instanceCollapsed = JSON.parse(localStorage.getItem("bocik.instanceCollapsed") || "{}");
 const savedPeerPorts = JSON.parse(localStorage.getItem("bocik.peerPorts") || "{}");
@@ -340,14 +407,17 @@ function renderSlot(instanceKey, slot, tokenSymbol) {
     '<span class="chevron">&#9660;</span></div>';
   html += '<div class="slot-body">';
   html += renderSlotBody(slot, tokenSymbol);
-  html += '<div class="actions">';
-  html += '<button class="buy" data-action="buy" data-instance="' + instanceKey + '" data-slot="' + slot.label + '" ' + (slot.position ? "disabled" : "") + '>Kup</button>';
-  html += '<button class="sell" data-action="sell" data-instance="' + instanceKey + '" data-slot="' + slot.label + '" ' + (slot.position ? "" : "disabled") + '>Sprzedaj</button>';
-  html += '<button class="panic" data-action="panic" data-instance="' + instanceKey + '" data-slot="' + slot.label + '" ' + (slot.position ? "" : "disabled") + '>Panic</button>';
-  if (slot.pendingManualBuy) {
-    html += '<button data-action="cancel" data-instance="' + instanceKey + '" data-slot="' + slot.label + '">Anuluj zlecenie</button>';
+  if (!READ_ONLY) {
+    html += '<div class="actions">';
+    html += '<button class="buy" data-action="buy" data-instance="' + instanceKey + '" data-slot="' + slot.label + '" ' + (slot.position ? "disabled" : "") + '>Kup</button>';
+    html += '<button class="sell" data-action="sell" data-instance="' + instanceKey + '" data-slot="' + slot.label + '" ' + (slot.position ? "" : "disabled") + '>Sprzedaj</button>';
+    html += '<button class="panic" data-action="panic" data-instance="' + instanceKey + '" data-slot="' + slot.label + '" ' + (slot.position ? "" : "disabled") + '>Panic</button>';
+    if (slot.pendingManualBuy) {
+      html += '<button data-action="cancel" data-instance="' + instanceKey + '" data-slot="' + slot.label + '">Anuluj zlecenie</button>';
+    }
+    html += "</div>";
   }
-  html += "</div></div></div>";
+  html += "</div></div>";
   return html;
 }
 

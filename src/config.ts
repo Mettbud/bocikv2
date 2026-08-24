@@ -226,6 +226,11 @@ const envSchema = z.object({
   // you opt in; each concurrently-run instance (A/B/C) needs its own port.
   DASHBOARD_WEB_ENABLED: boolFlag(false),
   DASHBOARD_WEB_PORT: numeric(4173),
+  // A second HTTP server that deliberately has no command endpoint. It is
+  // suitable for monitoring through a private tunnel without exposing the
+  // buy/sell/panic controls available on DASHBOARD_WEB_PORT.
+  DASHBOARD_READONLY_WEB_ENABLED: boolFlag(false),
+  DASHBOARD_READONLY_WEB_PORT: numeric(4273),
 
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
   LOG_FILE: z.string().default("./data/bot.log"),
@@ -312,6 +317,10 @@ function buildConfig(env: z.infer<typeof envSchema>) {
     priceReferenceSolAmount: env.PRICE_REFERENCE_SOL_AMOUNT,
     dashboardRefreshMs: env.DASHBOARD_REFRESH_MS,
     dashboardWeb: { enabled: env.DASHBOARD_WEB_ENABLED, port: env.DASHBOARD_WEB_PORT },
+    dashboardReadOnlyWeb: {
+      enabled: env.DASHBOARD_READONLY_WEB_ENABLED,
+      port: env.DASHBOARD_READONLY_WEB_PORT,
+    },
     log: { level: env.LOG_LEVEL, file: env.LOG_FILE, logSkips: env.DRY_RUN_LOG_SKIPS },
     files: { state: env.STATE_FILE, tradesCsv: env.TRADES_CSV },
   };

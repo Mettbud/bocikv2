@@ -5,9 +5,9 @@ import { describe, expect, it } from "vitest";
 import { loadConfig } from "../src/config.js";
 
 const profiles = [
-  { file: "BOCIK-A.env.ready", mode: "live", port: 4173, state: "./data/state.json", slotCEnabled: true },
-  { file: "BOCIK-B.env.ready", mode: "paper", port: 4174, state: "./data/state-b.json", slotCEnabled: false },
-  { file: "BOCIK-C.env.ready", mode: "paper", port: 4175, state: "./data/state-c.json", slotCEnabled: true },
+  { file: "BOCIK-A.env.ready", mode: "live", port: 4173, readOnlyPort: 4273, state: "./data/state.json", slotCEnabled: true },
+  { file: "BOCIK-B.env.ready", mode: "paper", port: 4174, readOnlyPort: 4274, state: "./data/state-b.json", slotCEnabled: false },
+  { file: "BOCIK-C.env.ready", mode: "paper", port: 4175, readOnlyPort: 4275, state: "./data/state-c.json", slotCEnabled: true },
 ] as const;
 
 describe("ready environment profiles", () => {
@@ -26,6 +26,7 @@ describe("ready environment profiles", () => {
       expect(raw.JUPITER_API_KEY).toBe("");
       expect(config.mode).toBe(profile.mode);
       expect(config.dashboardWeb).toEqual({ enabled: true, port: profile.port });
+      expect(config.dashboardReadOnlyWeb).toEqual({ enabled: true, port: profile.readOnlyPort });
       expect(config.files.state).toBe(profile.state);
       expect(config.strategy.slotCEnabled).toBe(profile.slotCEnabled);
       expect(config.trade.slotCSizePercent).toBe(30);

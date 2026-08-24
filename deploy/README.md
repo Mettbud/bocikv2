@@ -26,6 +26,23 @@ ssh -N -i "$env:USERPROFILE\.ssh\bocikv2_mikrus_ed25519" -p 10304 `
 Następnie otwórz tylko `http://127.0.0.1:4173`. Główny panel sam dołączy
 instancje B i C.
 
+### Osobny panel tylko do obserwowania
+
+Porty `4273`–`4275` nie udostępniają endpointu komend. Aby korzystać z
+panelu bez możliwości kupna, sprzedaży lub panic, zestaw tunel:
+
+```powershell
+ssh -N -i "$env:USERPROFILE\.ssh\bocikv2_mikrus_ed25519" -p 10304 `
+  -L 4273:127.0.0.1:4273 `
+  -L 4274:127.0.0.1:4274 `
+  -L 4275:127.0.0.1:4275 `
+  root@eve304.mikrus.xyz
+```
+
+Następnie otwórz `http://127.0.0.1:4273`. Strona pokazuje stan i ostatnie
+transakcje wszystkich instancji, ale serwer na tych portach nie przyjmuje
+`POST /api/command`.
+
 ## Obsługa
 
 ```bash

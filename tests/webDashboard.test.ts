@@ -1,6 +1,6 @@
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDashboardHttpServer } from "../src/cli/webDashboard.js";
+import { createDashboardHttpServer, createReadOnlyDashboardHttpServer } from "../src/cli/webDashboard.js";
 import type { CommandDeps } from "../src/cli/commands.js";
 import type { DashboardState, SlotDashboardState } from "../src/cli/dashboard.js";
 
@@ -217,5 +217,55 @@ describe("createDashboardHttpServer", () => {
     expect(res.status).toBe(204);
     expect(res.headers.get("access-control-allow-origin")).toBe("http://127.0.0.1:4175");
     expect(res.headers.get("access-control-allow-methods")).toContain("POST");
+  });
+});
+
+describe("createReadOnlyDashboardHttpServer", () => {
+  let server: ReturnType<typeof createReadOnlyDashboardHttpServer> | undefined;
+
+  afterEach(async () => {
+    if (server) await new Promise((resolve) => server!.close(resolve));
+    server = undefined;
+  });
+
+  it("serves live state and a page marked as read-only", async () => {
+    server = createReadOnlyDashboardHttpServer(() => state);
+    const port = await listenOnEphemeralPort(server);
+
+    const stateRes = await fetch(`http://127.0.0.1:${port}/api/state`);
+    expect(stateRes.status).toBe(200);
+    expect(((await stateRes.json()) as DashboardState).priceUsd).toBe(0.025);
+
+    const page = await (await fetch(`http://127.0.0.1:${port}/`)).text();
+    expect(page).toContain("bocik — podgląd tylko");
+    expect(page).toContain("const READ_ONLY = true;");
+    expect(page).toContain("const peerPorts = { b: 4274, c: 4275, ...savedPeerPorts }");
+  });
+
+  it("has no command endpoint, even for a manually crafted POST", async () => {
+    const manualBuy = vi.fn().mockResolvedValue(undefined);
+    server = createReadOnlyDashboardHttpServer(() => state);
+    const port = await listenOnEphemeralPort(server);
+
+    const res = await fetch(`http://127.0.0.1:${port}/api/command`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ line: "buy a" }),
+    });
+
+    expect(res.status).toBe(404);
+    expect(manualBuy).not.toHaveBeenCalled();
+  });
+
+  it("advertises only GET for cross-port read-only requests", async () => {
+    server = createReadOnlyDashboardHttpServer(() => state);
+    const port = await listenOnEphemeralPort(server);
+    const res = await fetch(`http://127.0.0.1:${port}/api/state`, {
+      method: "OPTIONS",
+      headers: { Origin: "http://127.0.0.1:4273" },
+    });
+
+    expect(res.status).toBe(204);
+    expect(res.headers.get("access-control-allow-methods")).toBe("GET, OPTIONS");
   });
 });
