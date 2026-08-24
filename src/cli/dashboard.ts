@@ -61,6 +61,13 @@ export interface SlotDashboardState {
   reinforcement: ReinforcementInfo | undefined;
   /** Slot A only, and only while BREAKOUT_BUY_ENABLED - undefined otherwise. */
   breakoutBuy: BreakoutBuyInfo | undefined;
+  /** A manual "buy ... @maxPrice" limit order waiting for the price to drop to it - undefined when none is pending. */
+  pendingManualBuy: PendingManualBuyInfo | undefined;
+}
+
+export interface PendingManualBuyInfo {
+  maxPriceUsd: number;
+  usdAmount: number | undefined;
 }
 
 export interface BreakoutBuyInfo {
@@ -224,6 +231,11 @@ function formatSlot(slot: SlotDashboardState, tokenSymbol: string): string[] {
   }
 
   if (!slot.position) {
+    if (slot.pendingManualBuy) {
+      const m = slot.pendingManualBuy;
+      const amountLabel = m.usdAmount !== undefined ? usd(m.usdAmount, 2) : `${slot.sizePercent}% salda`;
+      lines.push(`  ${colorize("Oczekujące zlecenie:", colors.YELLOW)} kup ${amountLabel} przy cenie <= ${usd(m.maxPriceUsd, 8)}`);
+    }
     if (slot.nextBuyUsdEstimate !== undefined) {
       lines.push(`  Wielkość kupna: ${slot.sizePercent}% salda (~${usd(slot.nextBuyUsdEstimate, 2)})`);
     }
@@ -276,6 +288,6 @@ export function renderDashboard(s: DashboardState): void {
   process.stdout.write("\x1b[2J\x1b[3J\x1b[H");
   console.log(formatDashboard(s));
   console.log(
-    "\ncommands: buy [usd] [a|b|c]  sell [percent] [a|b|c]  panic [a|b|c]  reset  status  quit",
+    "\ncommands: buy [usd] [a|b|c] [@maxPrice]  cancel [a|b|c]  sell [percent] [a|b|c]  panic [a|b|c]  reset  status  quit",
   );
 }

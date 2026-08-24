@@ -346,8 +346,11 @@ W tym samym terminalu działają komendy (wpisz i Enter). Domyślny slot to
 `a`, gdy pominięty:
 
 ```
-buy [usd] [a|b|c]     - kup ręcznie w danym slocie (pomija sygnał strategii, ale nie limity bezpieczeństwa); bez kwoty
-                         użyty jest normalny stały rozmiar slotu (SLOT_A/B/C_SIZE_PERCENT), tak jak przy zwykłym auto-kupnie
+buy [usd] [a|b|c] [@maxPrice] - kup ręcznie w danym slocie (pomija sygnał strategii, ale nie limity bezpieczeństwa);
+                         bez kwoty użyty jest normalny stały rozmiar slotu (SLOT_A/B/C_SIZE_PERCENT); z "@cena" NIE
+                         kupuje od razu - czeka (sprawdzane co tick), aż cena spadnie do tej wartości lub niżej
+cancel [a|b|c]         - odwołuje oczekujące zlecenie "buy ... @cena" dla danego slotu (domyślnie A); nic nie robi,
+                         jeśli nic nie czeka
 sell [percent] [a|b|c] - sprzedaj tyle % pozycji w danym slocie (domyślnie 100%), pomija wymóg minimalnego zysku netto
 panic [a|b|c]          - natychmiastowe wyjście z pozycji; bez argumentu wychodzi ze WSZYSTKICH slotów
 reset                  - (tylko paper) zeruje saldo i WSZYSTKIE sloty do stanu startowego - od zera, łącznie z
@@ -358,7 +361,9 @@ quit / exit           - zamyka bota, zapisując stan
 ```
 
 Przykłady: `buy` (kup w Slocie A za normalny % portfela), `buy b` (to samo
-w Slocie B), `buy 50 b` (wymuś dokładnie $50 w Slocie B), `sell 50`
+w Slocie B), `buy 50 b` (wymuś dokładnie $50 w Slocie B), `buy a @0.025`
+(czekaj z normalnym rozmiarem, aż cena Slotu A spadnie do $0.025 lub niżej),
+`cancel a` (odwołaj to oczekujące zlecenie), `sell 50`
 (sprzedaj 50% Slotu A), `sell b` (sprzedaj całość Slotu B), `panic`
 (wyjdź ze wszystkiego).
 

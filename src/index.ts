@@ -134,6 +134,16 @@ async function main() {
   // static/conservative defaults until enough of it has been rebuilt).
   let priceHistory: PriceSample[] = [];
   let recentTrades: RecentTrade[] = [];
+  // A manual "buy ... @maxPrice" waiting for the price to come down to it -
+  // checked every tick while the slot stays flat. Not persisted (a restart
+  // just drops it, same as the other transient trackers here) - reissue the
+  // command after restarting if you still want it. Cleared as soon as the
+  // buy actually fills (see executeBuy) or via the "cancel" command.
+  interface PendingManualBuy {
+    usdAmount: number | undefined;
+    maxPriceUsd: number;
+  }
+  const pendingManualBuy: Record<SlotKey, PendingManualBuy | null> = { A: null, B: null, C: null };
   // When did the trailing-stop pullback condition start holding true,
   // continuously, for each slot? Reset to null the moment it stops holding
   // (even for one tick) or the position closes - TRAILING_STOP_CONFIRMATION_MS
@@ -204,7 +214,32 @@ async function main() {
   startCommandLoop({
     logger: log,
     mode: config.mode,
-    manualBuy: (usdAmount, slot) => executeBuy(slot, usdAmount, { requireCostGate: false, tag: "MANUAL" }),
+    manualBuy: (usdAmount, slot, maxPriceUsd) => {
+      if (maxPriceUsd === undefined) {
+        pendingManualBuy[slot] = null;
+        return executeBuy(slot, usdAmount, { requireCostGate: false, tag: "MANUAL" });
+      }
+      const flip = getFlip(slot);
+      if (flip.phase !== "AWAITING_BUY") {
+        console.log(`buy: Slot ${slot} already in a position - sell first.`);
+        return Promise.resolve();
+      }
+      pendingManualBuy[slot] = { usdAmount, maxPriceUsd };
+      const msg = `Slot ${slot}: czeka na cenę <= $${maxPriceUsd.toFixed(8)}, wtedy kupi (odwołaj: "cancel ${slot.toLowerCase()}")`;
+      setEvent(msg);
+      console.log(msg);
+      return Promise.resolve();
+    },
+    cancelManualBuy: (slot) => {
+      if (!pendingManualBuy[slot]) {
+        console.log(`cancel: Slot ${slot} nie ma oczekującego zlecenia.`);
+        return;
+      }
+      pendingManualBuy[slot] = null;
+      const msg = `Slot ${slot}: odwołano oczekujące zlecenie kupna.`;
+      setEvent(msg);
+      console.log(msg);
+    },
     manualSell: (percent, slot) => executeSell(slot, percent, { requireProfitGate: false, tag: "MANUAL" }),
     panic: (slot) =>
       slot
@@ -256,9 +291,30 @@ async function main() {
     priceHistory = trimOldSamples(priceHistory, now, config.strategy.volatilityLookbackMs * 2);
     await refreshBalances();
 
+    // Manual "buy ... @maxPrice" limit orders fire before anything else -
+    // works regardless of DUAL_SLOT_ENABLED/SLOT_C_ENABLED (those only gate
+    // Slot B/C's own automatic reinforcement logic, not an explicit manual
+    // override) and independent of the normal buy signal.
+    await checkPendingManualBuy("A", currentPriceUsd);
+    await checkPendingManualBuy("B", currentPriceUsd);
+    await checkPendingManualBuy("C", currentPriceUsd);
+
     await evaluateSlotA(currentPriceUsd, solUsd);
     await evaluateSlotB(currentPriceUsd, solUsd);
     await evaluateSlotC(currentPriceUsd, solUsd);
+  }
+
+  async function checkPendingManualBuy(slotKey: SlotKey, currentPriceUsd: number): Promise<void> {
+    const pending = pendingManualBuy[slotKey];
+    if (!pending) return;
+    if (getFlip(slotKey).phase !== "AWAITING_BUY") {
+      // Slot opened a position some other way (auto rebuy, breakout buy) -
+      // this limit order no longer makes sense against an open position.
+      pendingManualBuy[slotKey] = null;
+      return;
+    }
+    if (currentPriceUsd > pending.maxPriceUsd) return;
+    await executeBuy(slotKey, pending.usdAmount, { requireCostGate: false, tag: "MANUAL" });
   }
 
   async function evaluateSlotA(currentPriceUsd: number, solUsd: number): Promise<void> {
@@ -775,6 +831,8 @@ async function main() {
       ),
     );
     if (slotKey === "A") breakoutBuyPendingSinceMs = null;
+    // A limit-style "buy ... @price" that was waiting is now satisfied.
+    pendingManualBuy[slotKey] = null;
     // Peak starts at the fill price (see afterBuy) - count that as its first "update".
     peakUpdatedAtMs[slotKey] = Date.now();
     saveState(config, s);
@@ -1078,6 +1136,7 @@ async function main() {
       minNetProfitPercent: config.strategy.minNetProfitPercent,
       reinforcement,
       breakoutBuy,
+      pendingManualBuy: pendingManualBuy[slotKey] ?? undefined,
     };
   }
 

@@ -19,6 +19,7 @@ const flatSlotA: SlotDashboardState = {
   minNetProfitPercent: 2,
   reinforcement: undefined,
   breakoutBuy: undefined,
+  pendingManualBuy: undefined,
 };
 
 const flatSlotB: SlotDashboardState = {
@@ -65,6 +66,24 @@ describe("formatDashboard", () => {
       slotA: { ...flatSlotA, rebuyTriggerUsd: 0.025, lastSellPriceUsd: 0.026 },
     });
     expect(out).toContain("Odkup poniżej:");
+  });
+
+  it("shows a pending manual buy limit order (explicit USD amount) while flat", () => {
+    const out = formatDashboard({
+      ...base,
+      slotA: { ...flatSlotA, pendingManualBuy: { maxPriceUsd: 0.025, usdAmount: 50 } },
+    });
+    expect(out).toContain("Oczekujące zlecenie:");
+    expect(out).toContain("$50.00");
+    expect(out).toContain("$0.02500000");
+  });
+
+  it("shows a pending manual buy limit order (normal slot size) while flat", () => {
+    const out = formatDashboard({
+      ...base,
+      slotA: { ...flatSlotA, pendingManualBuy: { maxPriceUsd: 0.025, usdAmount: undefined } },
+    });
+    expect(out).toContain("30% salda");
   });
 
   it("shows position details, sell target, and net-if-sold-now while holding", () => {

@@ -9,13 +9,17 @@ export interface CommandDeps {
   /**
    * Manual buy, bypassing the strategy's buy signal (still respects safety
    * limits). Omit usdAmount to use the slot's normal fixed size (% of the
-   * starting portfolio), same as an automatic buy would.
+   * starting portfolio), same as an automatic buy would. With maxPriceUsd,
+   * doesn't buy immediately - waits (checked every tick) until the price is
+   * at or below it, like a limit order; omit it to buy right away as before.
    */
-  manualBuy: (usdAmount: number | undefined, slot: SlotKey) => Promise<void>;
+  manualBuy: (usdAmount: number | undefined, slot: SlotKey, maxPriceUsd?: number) => Promise<void>;
   /** Manual sell of `percent`% of the given slot's position, bypassing the profit gate. */
   manualSell: (percent: number, slot: SlotKey) => Promise<void>;
   /** Sells a slot's whole position immediately, no questions asked. Omit slot to panic both. */
   panic: (slot: SlotKey | undefined) => Promise<void>;
+  /** Cancels a pending "buy ... @price" limit order for a slot, if one is waiting. No-op otherwise. */
+  cancelManualBuy: (slot: SlotKey) => void;
   /** Paper mode only: wipes both slots and balances back to a fresh start. */
   reset: () => void;
   onExit: () => void;
@@ -45,12 +49,20 @@ export async function handleLine(line: string, deps: CommandDeps): Promise<void>
 
   switch (cmd?.toLowerCase()) {
     case "buy": {
-      // "buy", "buy a", "buy 50", "buy 50 b" - an explicit USD amount is
-      // optional; without one, manualBuy falls back to the slot's normal
-      // fixed size (% of the starting portfolio).
+      // "buy", "buy a", "buy 50", "buy 50 b", "buy a @0.025", "buy 50 b @0.025"
+      // - an explicit USD amount is optional (falls back to the slot's normal
+      // fixed size); a "@price" token is also optional - with one, this
+      // doesn't buy immediately, it waits for the price to come down to (or
+      // below) it first, like a limit order.
       let usdAmount: number | undefined;
       let slot: SlotKey | undefined;
+      let maxPriceUsd: number | undefined;
       for (const token of rest) {
+        if (token.startsWith("@")) {
+          const asPrice = Number(token.slice(1));
+          if (Number.isFinite(asPrice) && asPrice > 0) maxPriceUsd = asPrice;
+          continue;
+        }
         const asSlot = parseSlot(token);
         if (asSlot) {
           slot = asSlot;
@@ -60,9 +72,12 @@ export async function handleLine(line: string, deps: CommandDeps): Promise<void>
         if (Number.isFinite(asNumber) && asNumber > 0) usdAmount = asNumber;
       }
       slot ??= "A";
-      await deps.manualBuy(usdAmount, slot);
+      await deps.manualBuy(usdAmount, slot, maxPriceUsd);
       return;
     }
+    case "cancel":
+      deps.cancelManualBuy(parseSlot(rest[0]) ?? "A");
+      return;
     case "sell": {
       // "sell", "sell 50", "sell b", "sell 50 b" - a token is either the
       // slot letter or the percent, in either order.
@@ -100,8 +115,9 @@ export async function handleLine(line: string, deps: CommandDeps): Promise<void>
       return; // dashboard redraws on its own timer
     case "help":
       console.log(
-        "commands: buy [usd] [a|b|c]  sell [percent] [a|b|c]  panic [a|b|c]  reset  status  quit\n" +
-          '  "buy" or "buy a" alone uses the slot\'s normal fixed size (e.g. 30% of the starting portfolio)',
+        "commands: buy [usd] [a|b|c] [@maxPrice]  cancel [a|b|c]  sell [percent] [a|b|c]  panic [a|b|c]  reset  status  quit\n" +
+          '  "buy" or "buy a" alone uses the slot\'s normal fixed size (e.g. 30% of the starting portfolio)\n' +
+          '  "buy a @0.025" waits for the price to drop to $0.025 or below before buying (normal size); "cancel a" cancels it',
       );
       return;
     case "quit":
