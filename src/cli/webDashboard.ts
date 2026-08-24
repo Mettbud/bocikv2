@@ -33,9 +33,33 @@ async function readJsonBody(req: import("node:http").IncomingMessage): Promise<u
   return JSON.parse(raw);
 }
 
+// Matches http://127.0.0.1:<port> or http://localhost:<port> only - each
+// bot instance (A/B/C) runs its own server on its own port, and the combined
+// view (see PAGE_HTML) needs to fetch a sibling instance's /api/state and
+// POST its /api/command cross-port, which the browser treats as
+// cross-origin. Reflecting only same-machine localhost origins (never "*")
+// keeps this from becoming an open CORS endpoint any website could hit.
+const LOCALHOST_ORIGIN = /^http:\/\/(127\.0\.0\.1|localhost):\d+$/;
+
+function applyCors(req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse): void {
+  const origin = req.headers.origin;
+  if (origin && LOCALHOST_ORIGIN.test(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  }
+}
+
 /** The bare HTTP server, with no listening/logging wired up - split out so tests can drive it on an ephemeral port. */
 export function createDashboardHttpServer(getSnapshot: () => DashboardState, deps: CommandDeps): Server {
   return createServer((req, res) => {
+    applyCors(req, res);
+    if (req.method === "OPTIONS") {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
     if (req.method === "GET" && req.url === "/api/state") {
       res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
       res.end(JSON.stringify(getSnapshot()));
@@ -101,63 +125,100 @@ const PAGE_HTML = `<!doctype html>
 <style>
   :root {
     color-scheme: dark;
-    --bg: #0d1017; --panel: #161a24; --border: #262c3a; --text: #dfe4ee; --muted: #7b8496;
+    --bg: #0b0d12; --panel: #161a24; --panel2: #1b2130; --border: #262c3a; --text: #e4e8f1; --muted: #7b8496;
     --green: #4ade80; --red: #f87171; --yellow: #fbbf24; --accent: #60a5fa;
   }
   * { box-sizing: border-box; }
   body {
     background: var(--bg); color: var(--text);
-    font: 14px/1.55 -apple-system, "Segoe UI", "Cascadia Code", Roboto, sans-serif;
-    margin: 0; padding: 28px; max-width: 920px; margin-inline: auto;
+    font: 14px/1.55 -apple-system, "Segoe UI", Roboto, sans-serif;
+    margin: 0; padding: 28px; max-width: 980px; margin-inline: auto;
   }
-  header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 4px; flex-wrap: wrap; gap: 8px; }
-  h1 { font-size: 22px; margin: 0; letter-spacing: 0.02em; }
-  .price { font-size: 28px; font-variant-numeric: tabular-nums; margin: 2px 0 22px; color: var(--accent); }
-  .badge { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; letter-spacing: 0.04em; }
+  h1 { font-size: 20px; margin: 0 0 20px; letter-spacing: 0.02em; }
+  .instance { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; margin-bottom: 18px; overflow: hidden; }
+  .instance-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 14px 20px; cursor: pointer; user-select: none;
+  }
+  .instance-head:hover { background: rgba(255,255,255,0.02); }
+  .instance-title { display: flex; align-items: center; gap: 10px; font-size: 15px; font-weight: 700; }
+  .instance-price { font-variant-numeric: tabular-nums; color: var(--accent); font-weight: 600; }
+  .chevron { color: var(--muted); font-size: 11px; transition: transform 0.15s; }
+  .instance.collapsed .chevron { transform: rotate(-90deg); }
+  .instance.collapsed .instance-body { display: none; }
+  .instance-body { padding: 0 20px 20px; }
+  .badge { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 11px; font-weight: 700; letter-spacing: 0.04em; }
   .badge-live { background: rgba(248,113,113,0.15); color: var(--red); }
   .badge-paper { background: rgba(74,222,128,0.15); color: var(--green); }
-  .conn { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
-  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); flex-shrink: 0; }
   .dot.stale { background: var(--red); }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-bottom: 20px; }
-  .slot { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; transition: opacity 0.15s; }
+  .connect-form { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+  .connect-form input {
+    width: 72px; background: var(--panel2); border: 1px solid var(--border); border-radius: 6px;
+    color: var(--text); padding: 4px 8px; font: inherit;
+  }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 14px; margin-bottom: 16px; }
+  .slot { background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
   .slot.collapsed .slot-body { display: none; }
-  .slot-head { display: flex; align-items: center; justify-content: space-between; cursor: pointer; user-select: none; }
-  .slot-head h2 { font-size: 15px; margin: 0; }
-  .slot-head .chevron { color: var(--muted); font-size: 12px; transition: transform 0.15s; }
+  .slot-head { display: flex; align-items: center; justify-content: space-between; cursor: pointer; user-select: none; margin-bottom: 2px; }
+  .slot-head h3 { font-size: 13.5px; margin: 0; font-weight: 700; }
   .slot.collapsed .chevron { transform: rotate(-90deg); }
-  .row { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; font-size: 13px; }
+  .row { display: flex; justify-content: space-between; gap: 12px; padding: 2.5px 0; font-size: 12.5px; }
   .label { color: var(--muted); }
   .pos { color: var(--green); }
   .neg { color: var(--red); }
   .muted { color: var(--muted); }
   .warn { color: var(--yellow); }
-  .actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+  .actions { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
   button {
-    font: inherit; font-size: 12px; font-weight: 600; padding: 7px 14px; border-radius: 8px;
-    border: 1px solid var(--border); background: #1d2330; color: var(--text); cursor: pointer;
+    font: inherit; font-size: 12px; font-weight: 600; padding: 6px 12px; border-radius: 7px;
+    border: 1px solid var(--border); background: #232a3a; color: var(--text); cursor: pointer;
   }
-  button:hover { border-color: var(--accent); }
-  button:disabled { opacity: 0.35; cursor: not-allowed; }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: 0.3; cursor: not-allowed; }
   button.buy { color: var(--green); }
   button.sell { color: var(--yellow); }
   button.panic { color: var(--red); }
-  .summary { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; margin-bottom: 20px; }
-  .toast { position: fixed; bottom: 20px; right: 20px; background: var(--panel); border: 1px solid var(--border);
+  .summary { background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; }
+  .toast {
+    position: fixed; bottom: 20px; right: 20px; background: var(--panel); border: 1px solid var(--border);
     border-radius: 10px; padding: 10px 16px; font-size: 13px; max-width: 360px; opacity: 0; transform: translateY(8px);
-    transition: opacity 0.2s, transform 0.2s; }
+    transition: opacity 0.2s, transform 0.2s; pointer-events: none; z-index: 10;
+  }
   .toast.show { opacity: 1; transform: translateY(0); }
-  table.trades { border-collapse: collapse; font-size: 13px; width: 100%; }
+  table.trades { border-collapse: collapse; font-size: 12.5px; width: 100%; }
   table.trades td { padding: 4px 8px 4px 0; border-bottom: 1px solid var(--border); }
-  h3 { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin: 24px 0 10px; }
+  h4 { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin: 18px 0 8px; }
+  .placeholder { color: var(--muted); font-size: 13px; padding: 4px 0 12px; }
 </style>
 </head>
 <body>
-  <header>
-    <h1>bocik</h1>
-    <span class="conn"><span class="dot" id="dot"></span><span id="connLabel">łączenie...</span></span>
-  </header>
-  <div id="app">Ładowanie...</div>
+  <h1>bocik</h1>
+
+  <div class="instance" data-instance="self">
+    <div class="instance-head" data-action="toggleInstance" data-instance="self">
+      <span class="instance-title"><span class="dot" data-role="dot"></span> Ta instancja <span class="instance-price" data-role="price"></span></span>
+      <span class="chevron">&#9660;</span>
+    </div>
+    <div class="instance-body" data-role="body"><p class="placeholder">Ładowanie...</p></div>
+  </div>
+
+  <div class="instance" data-instance="b">
+    <div class="instance-head" data-action="toggleInstance" data-instance="b">
+      <span class="instance-title"><span class="dot" data-role="dot"></span> Instancja B <span class="instance-price" data-role="price"></span></span>
+      <span class="chevron">&#9660;</span>
+    </div>
+    <div class="instance-body" data-role="body"></div>
+  </div>
+
+  <div class="instance" data-instance="c">
+    <div class="instance-head" data-action="toggleInstance" data-instance="c">
+      <span class="instance-title"><span class="dot" data-role="dot"></span> Instancja C <span class="instance-price" data-role="price"></span></span>
+      <span class="chevron">&#9660;</span>
+    </div>
+    <div class="instance-body" data-role="body"></div>
+  </div>
+
   <div class="toast" id="toast"></div>
 <script>
 function usd(n, d) {
@@ -180,12 +241,9 @@ function row(label, valueHtml) {
   return '<div class="row"><span class="label">' + label + ':</span><span>' + valueHtml + "</span></div>";
 }
 
-const collapsed = JSON.parse(localStorage.getItem("bocik.collapsed") || "{}");
-function toggleSlot(label) {
-  collapsed[label] = !collapsed[label];
-  localStorage.setItem("bocik.collapsed", JSON.stringify(collapsed));
-  renderLast();
-}
+const slotCollapsed = JSON.parse(localStorage.getItem("bocik.slotCollapsed") || "{}");
+const instanceCollapsed = JSON.parse(localStorage.getItem("bocik.instanceCollapsed") || "{}");
+const peerPorts = JSON.parse(localStorage.getItem("bocik.peerPorts") || "{}"); // { b: 4174, c: 4175 }
 
 function renderSlotBody(slot, tokenSymbol) {
   let html = "";
@@ -261,37 +319,31 @@ function renderSlotBody(slot, tokenSymbol) {
   return html;
 }
 
-function renderSlot(slot, tokenSymbol) {
-  const isCollapsed = !!collapsed[slot.label];
-  let html = '<div class="slot' + (isCollapsed ? " collapsed" : "") + '" data-slot="' + slot.label + '">';
-  html += '<div class="slot-head" onclick="toggleSlot(\\'' + slot.label + '\\')">' +
-    "<h2>Slot " + slot.label + " (" + slot.sizePercent + "% portfela)</h2>" +
+function renderSlot(instanceKey, slot, tokenSymbol) {
+  const ckey = instanceKey + ":" + slot.label;
+  const isCollapsed = !!slotCollapsed[ckey];
+  let html = '<div class="slot' + (isCollapsed ? " collapsed" : "") + '">';
+  html += '<div class="slot-head" data-action="toggleSlot" data-instance="' + instanceKey + '" data-slot="' + slot.label + '">' +
+    "<h3>Slot " + slot.label + " (" + slot.sizePercent + "%)</h3>" +
     '<span class="chevron">&#9660;</span></div>';
   html += '<div class="slot-body">';
   html += renderSlotBody(slot, tokenSymbol);
-  html += '<div class="actions" onclick="event.stopPropagation()">';
-  html += '<button class="buy" ' + (slot.position ? "disabled" : "") + ' onclick="sendCommand(\\'buy ' + slot.label.toLowerCase() + '\\', \\'Kupno zlecone (Slot ' + slot.label + ')\\')">Kup</button>';
-  html += '<button class="sell" ' + (slot.position ? "" : "disabled") + ' onclick="if(confirm(\\'Sprzedać całą pozycję Slotu ' + slot.label + '?\\')) sendCommand(\\'sell 100 ' + slot.label.toLowerCase() + '\\', \\'Sprzedaż zlecona (Slot ' + slot.label + ')\\')">Sprzedaj</button>';
-  html += '<button class="panic" ' + (slot.position ? "" : "disabled") + ' onclick="if(confirm(\\'PANIC - natychmiastowa sprzedaż Slotu ' + slot.label + '?\\')) sendCommand(\\'panic ' + slot.label.toLowerCase() + '\\', \\'Panic wysłany (Slot ' + slot.label + ')\\')">Panic</button>';
+  html += '<div class="actions">';
+  html += '<button class="buy" data-action="buy" data-instance="' + instanceKey + '" data-slot="' + slot.label + '" ' + (slot.position ? "disabled" : "") + '>Kup</button>';
+  html += '<button class="sell" data-action="sell" data-instance="' + instanceKey + '" data-slot="' + slot.label + '" ' + (slot.position ? "" : "disabled") + '>Sprzedaj</button>';
+  html += '<button class="panic" data-action="panic" data-instance="' + instanceKey + '" data-slot="' + slot.label + '" ' + (slot.position ? "" : "disabled") + '>Panic</button>';
   if (slot.pendingManualBuy) {
-    html += '<button onclick="sendCommand(\\'cancel ' + slot.label.toLowerCase() + '\\', \\'Zlecenie anulowane\\')">Anuluj zlecenie</button>';
+    html += '<button data-action="cancel" data-instance="' + instanceKey + '" data-slot="' + slot.label + '">Anuluj zlecenie</button>';
   }
   html += "</div></div></div>";
   return html;
 }
 
-let lastState = null;
-function renderLast() { if (lastState) render(lastState); }
-
-function render(s) {
-  lastState = s;
-  let html = '<div class="price">' + usd(s.priceUsd, 8) +
-    ' <span class="badge badge-' + s.mode.toLowerCase() + '">' + s.mode + "</span></div>";
-
-  html += '<div class="grid">';
-  html += renderSlot(s.slotA, s.tokenSymbol);
-  html += renderSlot(s.slotB, s.tokenSymbol);
-  if (s.slotC) html += renderSlot(s.slotC, s.tokenSymbol);
+function renderInstanceBody(instanceKey, s) {
+  let html = '<div class="grid">';
+  html += renderSlot(instanceKey, s.slotA, s.tokenSymbol);
+  html += renderSlot(instanceKey, s.slotB, s.tokenSymbol);
+  if (s.slotC) html += renderSlot(instanceKey, s.slotC, s.tokenSymbol);
   html += "</div>";
 
   html += '<div class="summary">';
@@ -304,7 +356,7 @@ function render(s) {
   html += "</div>";
 
   if (s.recentTrades && s.recentTrades.length > 0) {
-    html += "<h3>Ostatnie transakcje</h3><table class=\\"trades\\"><tbody>";
+    html += "<h4>Ostatnie transakcje</h4><table class=\\"trades\\"><tbody>";
     for (const t of s.recentTrades) {
       html += "<tr><td>" + (t.side === "BUY" ? '<span class="warn">KUPNO</span>' : '<span class="pos">SPRZEDAŻ</span>') +
         "</td><td>Slot " + t.slot + "</td><td>" + t.tokenAmount.toLocaleString("en-US") + " " + esc(s.tokenSymbol) +
@@ -316,10 +368,64 @@ function render(s) {
   }
 
   if (s.lastErrorMessage) {
-    html += '<h3>Ostatni błąd</h3><div class="warn">' + esc(s.lastErrorMessage) + "</div>";
+    html += '<h4>Ostatni błąd</h4><div class="warn">' + esc(s.lastErrorMessage) + "</div>";
   }
+  return html;
+}
 
-  document.getElementById("app").innerHTML = html;
+function connectForm(instanceKey) {
+  return '<div class="connect-form">Port: <input type="number" placeholder="np. 417' + (instanceKey === "b" ? "4" : "5") +
+    '" data-role="portInput" data-instance="' + instanceKey + '"> ' +
+    '<button data-action="connect" data-instance="' + instanceKey + '">Połącz</button></div>';
+}
+
+function panelEl(instanceKey) {
+  return document.querySelector('.instance[data-instance="' + instanceKey + '"]');
+}
+
+function setInstanceCollapsed(instanceKey, value) {
+  panelEl(instanceKey).classList.toggle("collapsed", value);
+  instanceCollapsed[instanceKey] = value;
+  localStorage.setItem("bocik.instanceCollapsed", JSON.stringify(instanceCollapsed));
+}
+
+const instances = {
+  self: { baseUrl: "", configured: true, failures: 0, lastState: null },
+  b: { baseUrl: null, configured: false, failures: 0, lastState: null },
+  c: { baseUrl: null, configured: false, failures: 0, lastState: null },
+};
+
+function initPeer(key) {
+  const port = peerPorts[key];
+  const panel = panelEl(key);
+  if (!port) {
+    panel.querySelector('[data-role="body"]').innerHTML =
+      '<div class="placeholder">Ta instancja nie jest tu skonfigurowana.</div>' + connectForm(key);
+    return;
+  }
+  instances[key].baseUrl = "http://127.0.0.1:" + port;
+  instances[key].configured = true;
+  tick(key);
+}
+
+async function sendCommand(instanceKey, line, successMsg) {
+  const inst = instances[instanceKey];
+  try {
+    const res = await fetch(inst.baseUrl + "/api/command", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ line }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      showToast(successMsg || ("wysłano: " + line), false);
+      tick(instanceKey);
+    } else {
+      showToast("błąd: " + (data.error || "nieznany"), true);
+    }
+  } catch (err) {
+    showToast("błąd połączenia: " + err.message, true);
+  }
 }
 
 function showToast(msg, isError) {
@@ -331,45 +437,74 @@ function showToast(msg, isError) {
   showToast._t = setTimeout(() => el.classList.remove("show"), 3500);
 }
 
-async function sendCommand(line, successMsg) {
+async function tick(instanceKey) {
+  const inst = instances[instanceKey];
+  if (!inst.configured) return;
+  const panel = panelEl(instanceKey);
+  const dot = panel.querySelector('[data-role="dot"]');
+  const priceEl = panel.querySelector('[data-role="price"]');
+  const body = panel.querySelector('[data-role="body"]');
   try {
-    const res = await fetch("/api/command", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ line }),
-    });
-    const data = await res.json();
-    if (data.ok) {
-      showToast(successMsg || ("wysłano: " + line), false);
-      tick();
-    } else {
-      showToast("błąd: " + (data.error || "nieznany"), true);
-    }
+    const res = await fetch(inst.baseUrl + "/api/state", { cache: "no-store" });
+    const state = await res.json();
+    inst.lastState = state;
+    inst.failures = 0;
+    dot.classList.remove("stale");
+    priceEl.innerHTML = usd(state.priceUsd, 8) + ' <span class="badge badge-' + state.mode.toLowerCase() + '">' + state.mode + "</span>";
+    body.innerHTML = renderInstanceBody(instanceKey, state);
   } catch (err) {
-    showToast("błąd połączenia: " + err.message, true);
+    inst.failures++;
+    dot.classList.add("stale");
+    if (inst.failures >= 3) {
+      body.innerHTML = '<p class="placeholder">Brak połączenia z instancją ' + esc(instanceKey) + " (" + esc(inst.baseUrl) + ").</p>" +
+        (instanceKey === "self" ? "" : connectForm(instanceKey));
+    }
   }
 }
 
-let failures = 0;
-async function tick() {
-  try {
-    const res = await fetch("/api/state", { cache: "no-store" });
-    const state = await res.json();
-    failures = 0;
-    document.getElementById("dot").classList.remove("stale");
-    document.getElementById("connLabel").textContent = "połączono";
-    render(state);
-  } catch (err) {
-    failures++;
-    document.getElementById("dot").classList.add("stale");
-    document.getElementById("connLabel").textContent = "brak połączenia";
-    if (failures === 3) {
-      document.getElementById("app").innerHTML = '<p class="muted">Nie mogę połączyć się z botem - upewnij się, że nadal działa.</p>';
-    }
+document.addEventListener("click", (e) => {
+  const el = e.target.closest("[data-action]");
+  if (!el) return;
+  const action = el.dataset.action;
+  const key = el.dataset.instance;
+  const slot = el.dataset.slot;
+
+  if (action === "toggleInstance") {
+    setInstanceCollapsed(key, !panelEl(key).classList.contains("collapsed"));
+    return;
   }
-}
-tick();
-setInterval(tick, 1000);
+  if (action === "toggleSlot") {
+    const ckey = key + ":" + slot;
+    slotCollapsed[ckey] = !slotCollapsed[ckey];
+    localStorage.setItem("bocik.slotCollapsed", JSON.stringify(slotCollapsed));
+    if (instances[key].lastState) {
+      panelEl(key).querySelector('[data-role="body"]').innerHTML = renderInstanceBody(key, instances[key].lastState);
+    }
+    return;
+  }
+  if (action === "connect") {
+    const input = panelEl(key).querySelector('[data-role="portInput"]');
+    const port = parseInt(input.value, 10);
+    if (!port || port < 1 || port > 65535) { showToast("podaj prawidłowy numer portu", true); return; }
+    peerPorts[key] = port;
+    localStorage.setItem("bocik.peerPorts", JSON.stringify(peerPorts));
+    initPeer(key);
+    return;
+  }
+  if (action === "buy") { sendCommand(key, "buy " + slot.toLowerCase(), "Kupno zlecone (Slot " + slot + ")"); return; }
+  if (action === "sell") { if (confirm("Sprzedać całą pozycję Slotu " + slot + "?")) sendCommand(key, "sell 100 " + slot.toLowerCase(), "Sprzedaż zlecona (Slot " + slot + ")"); return; }
+  if (action === "panic") { if (confirm("PANIC - natychmiastowa sprzedaż Slotu " + slot + "?")) sendCommand(key, "panic " + slot.toLowerCase(), "Panic wysłany (Slot " + slot + ")"); return; }
+  if (action === "cancel") { sendCommand(key, "cancel " + slot.toLowerCase(), "Zlecenie anulowane"); return; }
+});
+
+if (instanceCollapsed.self) setInstanceCollapsed("self", true);
+if (instanceCollapsed.b) setInstanceCollapsed("b", true);
+if (instanceCollapsed.c) setInstanceCollapsed("c", true);
+
+tick("self");
+initPeer("b");
+initPeer("c");
+setInterval(() => { tick("self"); tick("b"); tick("c"); }, 1000);
 </script>
 </body>
 </html>

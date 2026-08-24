@@ -101,7 +101,7 @@ describe("createDashboardHttpServer", () => {
     expect(second.priceUsd).toBe(0.03);
   });
 
-  it("serves an HTML page on /", async () => {
+  it("serves an HTML page on / with a syntactically valid embedded script", async () => {
     server = createDashboardHttpServer(() => state, fakeDeps());
     const port = await listenOnEphemeralPort(server);
 
@@ -110,6 +110,16 @@ describe("createDashboardHttpServer", () => {
     expect(res.headers.get("content-type")).toContain("text/html");
     const body = await res.text();
     expect(body).toContain("<!doctype html>");
+
+    // The page's client-side JS is a hand-written template-literal string
+    // with no build step to catch a typo/unescaped-quote mistake - this
+    // is the only thing that would have caught the multi-instance panel
+    // JS failing to parse at all.
+    const scripts = [...body.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1] ?? "");
+    expect(scripts.length).toBeGreaterThan(0);
+    for (const js of scripts) {
+      expect(() => new Function(js)).not.toThrow();
+    }
   });
 
   it("404s on an unknown path", async () => {
@@ -166,5 +176,38 @@ describe("createDashboardHttpServer", () => {
     const body = (await res.json()) as { ok: boolean; error: string };
     expect(body.ok).toBe(false);
     expect(body.error).toContain("simulation failed");
+  });
+
+  it("reflects a 127.0.0.1 Origin so a sibling instance's page can fetch this one", async () => {
+    server = createDashboardHttpServer(() => state, fakeDeps());
+    const port = await listenOnEphemeralPort(server);
+
+    const res = await fetch(`http://127.0.0.1:${port}/api/state`, {
+      headers: { Origin: "http://127.0.0.1:4174" },
+    });
+    expect(res.headers.get("access-control-allow-origin")).toBe("http://127.0.0.1:4174");
+  });
+
+  it("does not send CORS headers for a non-localhost Origin", async () => {
+    server = createDashboardHttpServer(() => state, fakeDeps());
+    const port = await listenOnEphemeralPort(server);
+
+    const res = await fetch(`http://127.0.0.1:${port}/api/state`, {
+      headers: { Origin: "https://evil.example" },
+    });
+    expect(res.headers.get("access-control-allow-origin")).toBeNull();
+  });
+
+  it("answers an OPTIONS preflight with 204 and the expected CORS headers", async () => {
+    server = createDashboardHttpServer(() => state, fakeDeps());
+    const port = await listenOnEphemeralPort(server);
+
+    const res = await fetch(`http://127.0.0.1:${port}/api/command`, {
+      method: "OPTIONS",
+      headers: { Origin: "http://127.0.0.1:4175" },
+    });
+    expect(res.status).toBe(204);
+    expect(res.headers.get("access-control-allow-origin")).toBe("http://127.0.0.1:4175");
+    expect(res.headers.get("access-control-allow-methods")).toContain("POST");
   });
 });
