@@ -318,13 +318,24 @@ async function main() {
     onExit: stop,
   });
 
+  let tickFailureCount = 0;
+  let lastTickFailureMessage = "";
   const tickLoop = (async () => {
     while (running) {
       try {
         await tick();
+        tickFailureCount = 0;
+        lastTickFailureMessage = "";
       } catch (err) {
         lastErrorMessage = String((err as Error).message ?? err);
-        log.error("tick failed", { error: lastErrorMessage });
+        if (tickFailureCount > 0 && lastTickFailureMessage === lastErrorMessage) {
+          tickFailureCount += 1;
+          log.error(`tick failed (${tickFailureCount}x in a row, same error as before)`);
+        } else {
+          tickFailureCount = 1;
+          lastTickFailureMessage = lastErrorMessage;
+          log.error("tick failed", { error: lastErrorMessage });
+        }
       }
       await sleep(config.pricePollIntervalMs);
     }
@@ -365,10 +376,14 @@ async function main() {
     // Manual "buy ... @maxPrice" limit orders fire before anything else -
     // works regardless of DUAL_SLOT_ENABLED/SLOT_C_ENABLED (those only gate
     // Slot B/C's own automatic reinforcement logic, not an explicit manual
-    // override) and independent of the normal buy signal.
-    await checkPendingManualBuy("A", currentPriceUsd);
-    await checkPendingManualBuy("B", currentPriceUsd);
-    await checkPendingManualBuy("C", currentPriceUsd);
+    // override) and independent of the normal buy signal. Wrapped the same
+    // as the slots below - a pending order that keeps throwing (e.g.
+    // 0x1788 on every attempt) must never abort the rest of the tick, which
+    // would otherwise skip B/C's pending orders AND all three slots'
+    // normal evaluation below, silently, for as long as it kept failing.
+    await evaluateSlotSafely("A", () => checkPendingManualBuy("A", currentPriceUsd));
+    await evaluateSlotSafely("B", () => checkPendingManualBuy("B", currentPriceUsd));
+    await evaluateSlotSafely("C", () => checkPendingManualBuy("C", currentPriceUsd));
 
     // Each slot isolated: one slot repeatedly failing (e.g. every automatic
     // buy attempt rejected on-chain) must never stop the OTHER slots from
@@ -380,12 +395,31 @@ async function main() {
     await evaluateSlotSafely("C", () => evaluateSlotC(currentPriceUsd, solUsd));
   }
 
+  // Consecutive tick failures per slot, purely for log noise control (NOT
+  // gating retries - a failing sell must always keep retrying). The first
+  // failure in a streak logs the full error (so it's diagnosable); repeats
+  // of the *same* error collapse to a one-liner instead of dumping the
+  // full raw simulation log block again every ~15-25s.
+  const tickFailureStreak: Record<SlotKey, { count: number; message: string }> = {
+    A: { count: 0, message: "" },
+    B: { count: 0, message: "" },
+    C: { count: 0, message: "" },
+  };
+
   async function evaluateSlotSafely(slotKey: SlotKey, run: () => Promise<void>): Promise<void> {
     try {
       await run();
+      tickFailureStreak[slotKey] = { count: 0, message: "" };
     } catch (err) {
       lastErrorMessage = String((err as Error).message ?? err);
-      log.error(`Slot ${slotKey}: tick evaluation failed`, { error: lastErrorMessage });
+      const streak = tickFailureStreak[slotKey];
+      if (streak.count > 0 && streak.message === lastErrorMessage) {
+        streak.count += 1;
+        log.error(`Slot ${slotKey}: tick evaluation still failing (${streak.count}x in a row, same error as before)`);
+      } else {
+        tickFailureStreak[slotKey] = { count: 1, message: lastErrorMessage };
+        log.error(`Slot ${slotKey}: tick evaluation failed`, { error: lastErrorMessage });
+      }
     }
   }
 
@@ -404,7 +438,12 @@ async function main() {
     // close, without being the thing that actually decides whether to buy -
     // see maxPriceUsd passed into executeBuy below for that.
     if (currentPriceUsd > pending.maxPriceUsd) return;
-    await executeBuy(slotKey, pending.usdAmount, { requireCostGate: false, tag: "MANUAL" }, pending.maxPriceUsd);
+    // isPendingRetry=true: this is a background retry loop (fires every
+    // tick once price looks close), not a one-shot user command - it needs
+    // the same failure-streak circuit breaker as automatic buys, or a
+    // persistently-failing order (e.g. 0x1788) hammers on-chain forever and
+    // floods the log with the full raw simulation dump every single tick.
+    await executeBuy(slotKey, pending.usdAmount, { requireCostGate: false, tag: "MANUAL" }, pending.maxPriceUsd, true);
   }
 
   async function evaluateSlotA(currentPriceUsd: number, solUsd: number): Promise<void> {
@@ -820,13 +859,19 @@ async function main() {
     usdAmountOverride: number | undefined,
     opts: { requireCostGate: boolean; tag: "AUTO" | "MANUAL" },
     maxPriceUsd?: number,
+    // true only for the background "buy ... @maxPrice" retry loop
+    // (checkPendingManualBuy) - it fires every tick on its own, same as an
+    // automatic buy, so it gets the same failure-streak circuit breaker.
+    // A one-shot typed "buy" command is never throttled by this.
+    isPendingRetry = false,
   ): Promise<void> {
     const flip = getFlip(slotKey);
     if (flip.phase !== "AWAITING_BUY") {
       if (opts.tag === "MANUAL") notify(`buy: Slot ${slotKey} already in a position - sell first.`);
       return;
     }
-    if (opts.tag === "AUTO" && isAutoBuyPaused(slotKey)) {
+    const throttled = opts.tag === "AUTO" || isPendingRetry;
+    if (throttled && isAutoBuyPaused(slotKey)) {
       if (config.log.logSkips) {
         const msRemaining = (autoBuyPausedUntilMs[slotKey] ?? Date.now()) - Date.now();
         log.info(`Slot ${slotKey}: auto-buy paused (${Math.ceil(msRemaining / 1000)}s remaining) - skipping`);
@@ -847,7 +892,7 @@ async function main() {
       autoBuyPausedUntilMs[slotKey] = null;
       autoBuyEscalation[slotKey] = 0;
     } catch (err) {
-      if (opts.tag === "AUTO") registerAutoBuyFailure(slotKey, err);
+      if (throttled) registerAutoBuyFailure(slotKey, err);
       throw err;
     } finally {
       slotLocks[slotKey] = false;

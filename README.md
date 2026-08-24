@@ -543,7 +543,20 @@ jest trwały.
 
 Osobno: błąd w jednym slocie (np. Slot B ciągle failuje) **nigdy nie
 blokuje** ewaluacji pozostałych slotów w tym samym ticku - każdy slot jest
-sprawdzany niezależnie, z własnym łapaniem błędów.
+sprawdzany niezależnie, z własnym łapaniem błędów. To samo dotyczy
+oczekującego zlecenia `buy ... @cena` (limit) - jeśli jego automatyczna
+próba realizacji failuje w kółko, nie blokuje sprawdzania pozostałych
+slotów ani ich zleceń, i po `AUTO_BUY_FAILURE_LIMIT` nieudanych próbach
+też dostaje ten sam cooldown z eskalacją co zwykłe auto-kupno (zlecenie
+zostaje w kolejce, tylko przestaje próbować na chwilę).
+
+Dodatkowo: jeśli ten sam błąd powtarza się identycznie tick po ticku (np.
+`0x1788` w kółko), w logu widać pełny szczegół tylko raz, a kolejne
+powtórzenia zwięzłe `Nx w rzędu, ten sam błąd co poprzednio` - żeby ekran
+nie zapychał się tą samą wielolinijkową symulacją w nieskończoność
+(sprzedaż nadal próbuje bez końca, co jest zamierzone - nigdy nie
+przestajemy próbować wyjść z pozycji, tylko przestajemy to zaśmiecać w
+logu).
 
 ## Ręczna sprzedaż nie wywołuje auto-rebuy
 
