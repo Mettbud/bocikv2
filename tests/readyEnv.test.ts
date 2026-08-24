@@ -51,6 +51,16 @@ describe("ready environment profiles", () => {
       expect(config.strategy.slotCTrailingStopPercent).toBe(0.5);
       expect(config.strategy.trailingStopConfirmationMs).toBe(4000);
       expect(config.strategy.trailingStopConfirmationTolerancePercent).toBe(0.5);
+      expect(config.strategy.stopLossPercent).toBe(20);
+      expect(config.strategy.slotCScalperEnabled).toBe(true);
+      expect(config.strategy.slotCScalperZoneMinPercent).toBe(10);
+      expect(config.strategy.slotCScalperZoneMaxPercent).toBe(20);
+      expect(config.strategy.slotCScalperTargetMinPercent).toBe(3);
+      expect(config.strategy.slotCScalperTargetMaxPercent).toBe(5);
+      expect(config.strategy.slotCScalperRebuyMinPercent).toBe(1.5);
+      expect(config.strategy.slotCScalperRebuyMaxPercent).toBe(3);
+      expect(config.strategy.adaptiveReentryCooldownMinMs).toBe(120_000);
+      expect(config.strategy.adaptiveReentryCooldownMaxMs).toBe(300_000);
       expect(config.strategy.slotCTriggerMinPercent).toBe(10);
       expect(config.strategy.slotCTriggerMaxPercent).toBe(22);
     });

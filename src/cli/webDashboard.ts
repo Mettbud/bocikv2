@@ -414,6 +414,15 @@ function renderSlotBody(slot, tokenSymbol) {
       html += row("Status", '<span class="muted">wyłączony</span>');
     } else if (r.slotADrawdownPercent === undefined) {
       html += row("Status", "czeka na otwartą pozycję w Slocie A");
+    } else if (r.zoneMaxDrawdownPercent !== undefined) {
+      html += row(
+        "Strefa C-scalper",
+        '<span class="warn">-' + r.triggerDropPercent.toFixed(2) + "%…-" + r.zoneMaxDrawdownPercent.toFixed(2) +
+          '%</span> (A teraz: <span class="' + signClass(r.slotADrawdownPercent) + '">' + pct(r.slotADrawdownPercent) + "</span>)",
+      );
+      if (r.rebuyTriggerUsd !== undefined) {
+        html += row("Kolejny odkup C", usd(r.rebuyTriggerUsd, 8) + " (-" + (r.rebuyDropPercent || 0).toFixed(2) + "%)");
+      }
     } else {
       html += row("Czeka aż Slot A będzie na", '<span class="warn">-' + r.triggerDropPercent.toFixed(2) + '%</span> (teraz: <span class="' +
         signClass(r.slotADrawdownPercent) + '">' + pct(r.slotADrawdownPercent) + "</span>)");
@@ -437,6 +446,9 @@ function renderSlotBody(slot, tokenSymbol) {
   }
 
   if (!p) {
+    if (slot.reentryCooldownSecondsLeft !== undefined) {
+      html += row("Cooldown po sprzedaży", '<span class="warn">' + slot.reentryCooldownSecondsLeft + "s</span> (rynek nadal obserwowany)");
+    }
     if (slot.autoBuyPausedSecondsLeft !== undefined) {
       html += row("Auto-kupno", '<span class="neg">WSTRZYMANE</span> (' + slot.autoBuyPausedSecondsLeft + "s)");
     }

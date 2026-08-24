@@ -8,6 +8,10 @@ export interface PersistedState {
   slotB: FlipState;
   /** Opt-in third reinforcement tier - see SLOT_C_ENABLED in config.ts. Always present (even when disabled) so the state shape is stable. */
   slotC: FlipState;
+  /** Successful full-sell timestamps; persist per-slot re-entry cooldowns across restarts. */
+  slotLastSellAtMs: Record<"A" | "B" | "C", number>;
+  /** Cooldown duration frozen at each sell, so restart cannot recalculate it. */
+  slotReentryCooldownMs: Record<"A" | "B" | "C", number>;
   /** Only meaningful in paper mode - live balances always come from chain. */
   paperSolBalance: number;
   paperTokenBalance: number;
@@ -46,6 +50,8 @@ export function loadState(
     slotA: initialFlipState(),
     slotB: initialFlipState(),
     slotC: initialFlipState(),
+    slotLastSellAtMs: { A: 0, B: 0, C: 0 },
+    slotReentryCooldownMs: { A: 0, B: 0, C: 0 },
     paperSolBalance: defaultSolBalance,
     paperTokenBalance: 0,
     realizedPnlUsd: 0,
@@ -72,6 +78,16 @@ export function loadState(
       slotA: raw.slotA ?? raw.flip ?? initialFlipState(),
       slotB: raw.slotB ?? initialFlipState(),
       slotC: raw.slotC ?? initialFlipState(),
+      slotLastSellAtMs: {
+        A: raw.slotLastSellAtMs?.A ?? 0,
+        B: raw.slotLastSellAtMs?.B ?? 0,
+        C: raw.slotLastSellAtMs?.C ?? 0,
+      },
+      slotReentryCooldownMs: {
+        A: raw.slotReentryCooldownMs?.A ?? 0,
+        B: raw.slotReentryCooldownMs?.B ?? 0,
+        C: raw.slotReentryCooldownMs?.C ?? 0,
+      },
       paperSolBalance: raw.paperSolBalance ?? defaultSolBalance,
       paperTokenBalance: raw.paperTokenBalance ?? 0,
       realizedPnlUsd: raw.realizedPnlUsd ?? 0,

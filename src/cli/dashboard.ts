@@ -38,6 +38,11 @@ export interface ReinforcementInfo {
   triggerDropPercent: number;
   /** Slot A's current unrealized %, when it holds a position (negative = underwater). */
   slotADrawdownPercent: number | undefined;
+  /** Slot C scalper upper edge; undefined for ordinary reinforcement mode. */
+  zoneMaxDrawdownPercent?: number;
+  /** Slot C's current adaptive drop required below its own last sell. */
+  rebuyDropPercent?: number;
+  rebuyTriggerUsd?: number;
 }
 
 export interface SlotDashboardState {
@@ -69,6 +74,8 @@ export interface SlotDashboardState {
   pendingManualBuy: PendingManualBuyInfo | undefined;
   /** Seconds left on the auto-buy circuit breaker (see AUTO_BUY_FAILURE_LIMIT) - undefined when not paused. */
   autoBuyPausedSecondsLeft: number | undefined;
+  /** Universal post-sell cooldown; market observation continues. */
+  reentryCooldownSecondsLeft?: number;
 }
 
 export interface PendingManualBuyInfo {
@@ -240,6 +247,16 @@ function formatSlot(slot: SlotDashboardState, tokenSymbol: string): string[] {
       lines.push(`  ${colorize(`Wyłączony (${disabledFlag})`, colors.DIM)}`);
     } else if (r.slotADrawdownPercent === undefined) {
       lines.push(`  Czeka na otwartą pozycję w Slocie A.`);
+    } else if (r.zoneMaxDrawdownPercent !== undefined) {
+      lines.push(
+        `  Strefa C-scalper: ${colorize(`-${r.triggerDropPercent.toFixed(2)}%…-${r.zoneMaxDrawdownPercent.toFixed(2)}%`, colors.YELLOW)} ` +
+          `(A teraz: ${colorize(pct(r.slotADrawdownPercent), signColor(r.slotADrawdownPercent))})`,
+      );
+      if (r.rebuyTriggerUsd !== undefined) {
+        lines.push(
+          `  Kolejny odkup C: ${usd(r.rebuyTriggerUsd, 8)} (-${(r.rebuyDropPercent ?? 0).toFixed(2)}% od ostatniej sprzedaży)`,
+        );
+      }
     } else {
       lines.push(
         `  Czeka aż Slot A będzie na ${colorize(`-${r.triggerDropPercent.toFixed(2)}%`, colors.YELLOW)} ` +
@@ -270,6 +287,12 @@ function formatSlot(slot: SlotDashboardState, tokenSymbol: string): string[] {
   }
 
   if (!slot.position) {
+    if (slot.reentryCooldownSecondsLeft !== undefined) {
+      lines.push(
+        `  ${colorize("Cooldown po sprzedaży", colors.YELLOW)}: ${slot.reentryCooldownSecondsLeft}s ` +
+          `(rynek nadal obserwowany)`,
+      );
+    }
     if (slot.autoBuyPausedSecondsLeft !== undefined) {
       lines.push(
         `  ${colorize("Auto-kupno WSTRZYMANE", colors.RED)} (${slot.autoBuyPausedSecondsLeft}s) - kilka nieudanych prób z rzędu; ręczne "buy" nadal działa`,

@@ -56,6 +56,12 @@ const envSchema = z.object({
   // interval forever. Resets to this base value on any successful buy.
   AUTO_BUY_COOLDOWN_MS: numeric(5 * 60 * 1000),
   AUTO_BUY_MAX_COOLDOWN_MS: numeric(30 * 60 * 1000),
+  // After ANY full sell, the same slot keeps observing the market but may
+  // not open a new position until this cooldown expires.
+  ADAPTIVE_REENTRY_COOLDOWN_ENABLED: boolFlag(true),
+  ADAPTIVE_REENTRY_COOLDOWN_MIN_MS: numeric(2 * 60 * 1000),
+  ADAPTIVE_REENTRY_COOLDOWN_MAX_MS: numeric(5 * 60 * 1000),
+  ADAPTIVE_REENTRY_COOLDOWN_FULL_AT_VOLATILITY_PERCENT: numeric(10),
 
   // Two independent slots, each sized as a fixed % of the STARTING
   // portfolio value (PAPER_BALANCE_USD in paper mode, or whatever the
@@ -100,6 +106,18 @@ const envSchema = z.object({
   SLOT_C_TRIGGER_MULTIPLIER: numeric(2),
   SLOT_C_TRIGGER_MIN_PERCENT: numeric(10),
   SLOT_C_TRIGGER_MAX_PERCENT: numeric(22),
+  // Aggressive but bounded Slot C scalper. It is allowed to open only while
+  // Slot A's drawdown is inside this zone, then must buy back below its own
+  // last sell instead of churning at the same price.
+  SLOT_C_SCALPER_ENABLED: boolFlag(false),
+  SLOT_C_SCALPER_ZONE_MIN_PERCENT: numeric(10),
+  SLOT_C_SCALPER_ZONE_MAX_PERCENT: numeric(20),
+  SLOT_C_SCALPER_TARGET_MULTIPLIER: numeric(1.5),
+  SLOT_C_SCALPER_TARGET_MIN_PERCENT: numeric(3),
+  SLOT_C_SCALPER_TARGET_MAX_PERCENT: numeric(5),
+  SLOT_C_SCALPER_REBUY_MULTIPLIER: numeric(0.5),
+  SLOT_C_SCALPER_REBUY_MIN_PERCENT: numeric(1.5),
+  SLOT_C_SCALPER_REBUY_MAX_PERCENT: numeric(3),
   // Same idea as SLOT_B_TRAILING_STOP_* - lets Slot C arm/trail at smaller
   // moves than Slot A, since it's also a quick-flip reinforcement position,
   // not a "ride to the full target" one. Defaults match Slot A/B's.
@@ -223,7 +241,7 @@ const envSchema = z.object({
   // Optional safety net only - not part of the flip logic itself. Set to 0
   // to disable. Guards against holding a bag through a crash while we wait
   // for a "sell high" that never comes.
-  STOP_LOSS_PERCENT: numeric(25),
+  STOP_LOSS_PERCENT: numeric(20),
 
   PRIORITY_LEVEL: z.enum(["medium", "high", "veryHigh"]).default("medium"),
   PRIORITY_MAX_LAMPORTS: numeric(1_000_000),
@@ -286,6 +304,10 @@ function buildConfig(env: z.infer<typeof envSchema>) {
       autoBuyFailureLimit: env.AUTO_BUY_FAILURE_LIMIT,
       autoBuyCooldownMs: env.AUTO_BUY_COOLDOWN_MS,
       autoBuyMaxCooldownMs: env.AUTO_BUY_MAX_COOLDOWN_MS,
+      adaptiveReentryCooldownEnabled: env.ADAPTIVE_REENTRY_COOLDOWN_ENABLED,
+      adaptiveReentryCooldownMinMs: env.ADAPTIVE_REENTRY_COOLDOWN_MIN_MS,
+      adaptiveReentryCooldownMaxMs: env.ADAPTIVE_REENTRY_COOLDOWN_MAX_MS,
+      adaptiveReentryCooldownFullAtVolatilityPercent: env.ADAPTIVE_REENTRY_COOLDOWN_FULL_AT_VOLATILITY_PERCENT,
       targetGainPercent: env.TARGET_GAIN_PERCENT,
       minNetProfitPercent: env.MIN_NET_PROFIT_PERCENT,
       rebuyDropPercent: env.REBUY_DROP_PERCENT,
@@ -309,6 +331,15 @@ function buildConfig(env: z.infer<typeof envSchema>) {
       slotCTriggerMultiplier: env.SLOT_C_TRIGGER_MULTIPLIER,
       slotCTriggerMinPercent: env.SLOT_C_TRIGGER_MIN_PERCENT,
       slotCTriggerMaxPercent: env.SLOT_C_TRIGGER_MAX_PERCENT,
+      slotCScalperEnabled: env.SLOT_C_SCALPER_ENABLED,
+      slotCScalperZoneMinPercent: env.SLOT_C_SCALPER_ZONE_MIN_PERCENT,
+      slotCScalperZoneMaxPercent: env.SLOT_C_SCALPER_ZONE_MAX_PERCENT,
+      slotCScalperTargetMultiplier: env.SLOT_C_SCALPER_TARGET_MULTIPLIER,
+      slotCScalperTargetMinPercent: env.SLOT_C_SCALPER_TARGET_MIN_PERCENT,
+      slotCScalperTargetMaxPercent: env.SLOT_C_SCALPER_TARGET_MAX_PERCENT,
+      slotCScalperRebuyMultiplier: env.SLOT_C_SCALPER_REBUY_MULTIPLIER,
+      slotCScalperRebuyMinPercent: env.SLOT_C_SCALPER_REBUY_MIN_PERCENT,
+      slotCScalperRebuyMaxPercent: env.SLOT_C_SCALPER_REBUY_MAX_PERCENT,
       slotARequireManualFirstBuy: env.SLOT_A_REQUIRE_MANUAL_FIRST_BUY,
       trailingStopEnabled: env.TRAILING_STOP_ENABLED,
       trailingStopArmPercent: env.TRAILING_STOP_ARM_PERCENT,
@@ -374,6 +405,21 @@ export function loadConfig(rawEnv: NodeJS.ProcessEnv = process.env): BotConfig {
     throw new Error(
       "Adaptive rebuy requires 0 <= ADAPTIVE_REBUY_MIN_PERCENT <= ADAPTIVE_REBUY_MAX_PERCENT and a non-negative multiplier.",
     );
+  }
+  if (
+    parsed.SLOT_C_SCALPER_ZONE_MIN_PERCENT < 0 ||
+    parsed.SLOT_C_SCALPER_ZONE_MAX_PERCENT <= parsed.SLOT_C_SCALPER_ZONE_MIN_PERCENT ||
+    parsed.SLOT_C_SCALPER_TARGET_MIN_PERCENT < 0 ||
+    parsed.SLOT_C_SCALPER_TARGET_MAX_PERCENT < parsed.SLOT_C_SCALPER_TARGET_MIN_PERCENT ||
+    parsed.SLOT_C_SCALPER_TARGET_MULTIPLIER < 0 ||
+    parsed.SLOT_C_SCALPER_REBUY_MIN_PERCENT < 0 ||
+    parsed.SLOT_C_SCALPER_REBUY_MAX_PERCENT < parsed.SLOT_C_SCALPER_REBUY_MIN_PERCENT ||
+    parsed.SLOT_C_SCALPER_REBUY_MULTIPLIER < 0 ||
+    parsed.ADAPTIVE_REENTRY_COOLDOWN_MIN_MS < 0 ||
+    parsed.ADAPTIVE_REENTRY_COOLDOWN_MAX_MS < parsed.ADAPTIVE_REENTRY_COOLDOWN_MIN_MS ||
+    parsed.ADAPTIVE_REENTRY_COOLDOWN_FULL_AT_VOLATILITY_PERCENT <= 0
+  ) {
+    throw new Error("Invalid Slot C scalper zone, target, rebuy range or cooldown.");
   }
   if (parsed.TRADING_MODE === "live" && !parsed.WALLET_PRIVATE_KEY) {
     throw new Error("WALLET_PRIVATE_KEY is required when TRADING_MODE=live.");

@@ -154,6 +154,31 @@ export function isReinforcementBuySignal(
   return grossMovePercent(slotA.buyPrice, currentPrice) <= -triggerDropPercent;
 }
 
+/**
+ * Slot C scalper entry: A must remain inside the configured drawdown zone.
+ * The first C entry can happen anywhere inside it; every later entry must
+ * additionally be below C's own last sell and past the persisted cooldown.
+ */
+export function isZoneScalperBuySignal(
+  slotA: FlipState,
+  slotC: FlipState,
+  currentPrice: number,
+  zoneMinDrawdownPercent: number,
+  zoneMaxDrawdownPercent: number,
+  rebuyDropPercent: number,
+  nowMs: number,
+  lastSellAtMs: number,
+  cooldownMs: number,
+): boolean {
+  if (slotC.phase !== "AWAITING_BUY" || slotC.requireManualNextBuy) return false;
+  if (slotA.phase !== "AWAITING_SELL" || slotA.buyPrice === null) return false;
+  const drawdown = -grossMovePercent(slotA.buyPrice, currentPrice);
+  if (drawdown < zoneMinDrawdownPercent || drawdown > zoneMaxDrawdownPercent) return false;
+  if (slotC.lastSellPrice === null) return true;
+  if (nowMs - lastSellAtMs < cooldownMs) return false;
+  return currentPrice <= rebuyTriggerPrice(slotC.lastSellPrice, rebuyDropPercent);
+}
+
 /** Optional safety net, independent of the flip logic - not the profit strategy. */
 export function isStopLossTriggered(
   buyPrice: number,

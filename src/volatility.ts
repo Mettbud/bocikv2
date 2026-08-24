@@ -85,6 +85,18 @@ export function computeAdaptiveTargetPercent(
   return Math.min(maxPercent, Math.max(minPercent, raw));
 }
 
+/** Linear 2-5 minute style cooldown: quiet market -> min, configured
+ * full-volatility point (or above) -> max. */
+export function computeAdaptiveCooldownMs(
+  typicalMovePercent: number,
+  minMs: number,
+  maxMs: number,
+  fullAtVolatilityPercent: number,
+): number {
+  const ratio = Math.min(1, Math.max(0, typicalMovePercent / fullAtVolatilityPercent));
+  return Math.round(minMs + (maxMs - minMs) * ratio);
+}
+
 /** Drops samples older than `maxAgeMs` from the front of a time-ordered buffer. */
 export function trimOldSamples(samples: PriceSample[], nowMs: number, maxAgeMs: number): PriceSample[] {
   const cutoff = nowMs - maxAgeMs;

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   computeAdaptiveTargetPercent,
+  computeAdaptiveCooldownMs,
   trimOldSamples,
   volatilityPerSqrtSecond,
   windowStats,
@@ -56,6 +57,15 @@ describe("computeAdaptiveTargetPercent", () => {
     expect(computeAdaptiveTargetPercent(2, 1.5, 3, 15)).toBe(3); // 3 floored up
     expect(computeAdaptiveTargetPercent(5, 1.5, 3, 15)).toBeCloseTo(7.5, 5);
     expect(computeAdaptiveTargetPercent(20, 1.5, 3, 15)).toBe(15); // capped
+  });
+});
+
+describe("computeAdaptiveCooldownMs", () => {
+  it("scales linearly and clamps to the configured 2-5 minute range", () => {
+    expect(computeAdaptiveCooldownMs(0, 120_000, 300_000, 10)).toBe(120_000);
+    expect(computeAdaptiveCooldownMs(5, 120_000, 300_000, 10)).toBe(210_000);
+    expect(computeAdaptiveCooldownMs(10, 120_000, 300_000, 10)).toBe(300_000);
+    expect(computeAdaptiveCooldownMs(50, 120_000, 300_000, 10)).toBe(300_000);
   });
 });
 

@@ -431,6 +431,15 @@ po cofnięciu 0,5% od późniejszego szczytu. Cofnięcie musi zostać potwierdzo
 przez 4 sekundy; bufor 0,5 punktu procentowego podtrzymuje licznik podczas
 małego odbicia, ale nie rozluźnia właściwej ceny sprzedaży.
 
+Slot C może pracować jako ograniczony scalper (`SLOT_C_SCALPER_ENABLED=true`):
+otwiera się tylko, gdy pozycja A jest w strefie straty 10–20%, używa celu
+3–5%, a po sprzedaży wymaga ceny 1,5–3% niższej od własnej ostatniej
+sprzedaży. Poniżej strefy nie otwiera nowych pozycji. Wszystkie sloty po
+pełnej sprzedaży nadal obserwują rynek, ale mają osobny, trwały cooldown
+adaptacyjny 2–5 minut. Czas jest zamrażany w momencie sprzedaży; spokojny
+rynek daje krótszą przerwę, a zmienny dłuższą. Stop-loss profili A/B/C wynosi
+20% od wejścia konkretnego slotu.
+
 ```bash
 npm install
 cp .env.example .env      # uzupełnij WALLET_PRIVATE_KEY/JUPITER_API_KEY tylko dla trybu live

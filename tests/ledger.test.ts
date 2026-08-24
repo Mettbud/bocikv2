@@ -41,6 +41,20 @@ describe("loadState", () => {
     expect(state.initialPortfolioUsd).toBe(777);
   });
 
+  it("persists per-slot sell time and frozen adaptive cooldown", () => {
+    writeFileSync(
+      statePath,
+      JSON.stringify({
+        mode: "paper",
+        slotLastSellAtMs: { A: 1000, B: 2000, C: 3000 },
+        slotReentryCooldownMs: { A: 120_000, B: 210_000, C: 300_000 },
+      }),
+    );
+    const state = loadState(stubConfig(statePath, "paper"), 5, 1000);
+    expect(state.slotLastSellAtMs).toEqual({ A: 1000, B: 2000, C: 3000 });
+    expect(state.slotReentryCooldownMs).toEqual({ A: 120_000, B: 210_000, C: 300_000 });
+  });
+
   it("refuses a state file saved under a different mode - starts fresh instead of mixing paper and live numbers", () => {
     writeFileSync(
       statePath,

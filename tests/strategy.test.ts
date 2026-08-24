@@ -12,6 +12,7 @@ import {
   isTrailingStopTriggered,
   isWithinBreakoutBuyBand,
   isWithinTrailingStopBand,
+  isZoneScalperBuySignal,
   rebuyTriggerPrice,
   sellTargetPrice,
   shouldRequireManualNextBuy,
@@ -26,6 +27,25 @@ describe("flip strategy state machine", () => {
     expect(shouldRequireManualNextBuy("A", "TRAILING_STOP")).toBe(false);
     expect(shouldRequireManualNextBuy("B", "MANUAL")).toBe(false);
     expect(shouldRequireManualNextBuy("C", "PANIC")).toBe(false);
+  });
+
+  it("keeps Slot C scalping inside A's zone and requires a lower rebuy after cooldown", () => {
+    const slotA = afterBuy(initialFlipState(), 100, 1, {
+      buyLegPercent: 0,
+      buyNetworkFeeLamports: 0,
+      costUsd: 100,
+    }, 5);
+    const freshC = initialFlipState();
+    expect(isZoneScalperBuySignal(slotA, freshC, 90, 10, 20, 2, 1_000, 0, 300_000)).toBe(true);
+    expect(isZoneScalperBuySignal(slotA, freshC, 79, 10, 20, 2, 1_000, 0, 300_000)).toBe(false);
+
+    const soldC = afterSell(
+      afterBuy(freshC, 88, 1, { buyLegPercent: 0, buyNetworkFeeLamports: 0, costUsd: 30 }, 4),
+      90,
+    );
+    expect(isZoneScalperBuySignal(slotA, soldC, 85, 10, 20, 2, 200_000, 100_000, 300_000)).toBe(false);
+    expect(isZoneScalperBuySignal(slotA, soldC, 89, 10, 20, 2, 500_000, 100_000, 300_000)).toBe(false);
+    expect(isZoneScalperBuySignal(slotA, soldC, 85, 10, 20, 2, 500_000, 100_000, 300_000)).toBe(true);
   });
   it("buys immediately on the very first tick (no prior sell)", () => {
     const state = initialFlipState();

@@ -20,6 +20,7 @@ import {
   isTrailingStopTriggered,
   isWithinBreakoutBuyBand,
   isWithinTrailingStopBand,
+  isZoneScalperBuySignal,
   shouldRequireManualNextBuy,
   sellTargetPrice,
   updateBreakoutPeak,
@@ -29,7 +30,7 @@ import {
 import { appendTrade, loadState, saveState, type PersistedState } from "./ledger.js";
 import { executeLeg, priceLeg } from "./trader.js";
 import { computeFixedSlotTradeUsd } from "./sizing.js";
-import { computeAdaptiveTargetPercent, trimOldSamples, windowStats, type PriceSample } from "./volatility.js";
+import { computeAdaptiveCooldownMs, computeAdaptiveTargetPercent, trimOldSamples, windowStats, type PriceSample } from "./volatility.js";
 import { renderDashboard, type DashboardState, type SlotDashboardState } from "./cli/dashboard.js";
 import { startCommandLoop, type CommandDeps, type SlotKey } from "./cli/commands.js";
 import { startReadOnlyWebDashboard, startWebDashboard } from "./cli/webDashboard.js";
@@ -542,8 +543,25 @@ async function main() {
     }
     if (flip.phase !== "AWAITING_BUY" || !config.strategy.slotCEnabled || !config.strategy.autoBuyEnabled) return;
 
-    const triggerDropPercent = computeCurrentSlotCTriggerDropPercent();
-    if (isReinforcementBuySignal(s.slotA, s.slotC, currentPriceUsd, triggerDropPercent)) {
+    const shouldBuy = config.strategy.slotCScalperEnabled
+      ? isZoneScalperBuySignal(
+          s.slotA,
+          s.slotC,
+          currentPriceUsd,
+          config.strategy.slotCScalperZoneMinPercent,
+          config.strategy.slotCScalperZoneMaxPercent,
+          computeCurrentSlotCScalperRebuyPercent(),
+          Date.now(),
+          s.slotLastSellAtMs.C,
+          s.slotReentryCooldownMs.C,
+        )
+      : isReinforcementBuySignal(
+          s.slotA,
+          s.slotC,
+          currentPriceUsd,
+          computeCurrentSlotCTriggerDropPercent(),
+        );
+    if (shouldBuy) {
       await executeBuy("C", undefined, { requireCostGate: true, tag: "AUTO" });
     }
   }
@@ -812,6 +830,43 @@ async function main() {
     );
   }
 
+  function computeTargetGainPercentFor(slotKey: SlotKey): number {
+    if (slotKey !== "C" || !config.strategy.slotCScalperEnabled) return computeCurrentTargetGainPercent();
+    const typicalMove = currentTypicalMovePercent();
+    if (typicalMove === undefined) return config.strategy.slotCScalperTargetMaxPercent;
+    return computeAdaptiveTargetPercent(
+      typicalMove,
+      config.strategy.slotCScalperTargetMultiplier,
+      config.strategy.slotCScalperTargetMinPercent,
+      config.strategy.slotCScalperTargetMaxPercent,
+    );
+  }
+
+  function computeCurrentSlotCScalperRebuyPercent(): number {
+    const typicalMove = currentTypicalMovePercent();
+    if (typicalMove === undefined) return config.strategy.slotCScalperRebuyMaxPercent;
+    return computeAdaptiveTargetPercent(
+      typicalMove,
+      config.strategy.slotCScalperRebuyMultiplier,
+      config.strategy.slotCScalperRebuyMinPercent,
+      config.strategy.slotCScalperRebuyMaxPercent,
+    );
+  }
+
+  function computeCurrentReentryCooldownMs(): number {
+    if (!config.strategy.adaptiveReentryCooldownEnabled) {
+      return config.strategy.adaptiveReentryCooldownMaxMs;
+    }
+    const typicalMove = currentTypicalMovePercent();
+    if (typicalMove === undefined) return config.strategy.adaptiveReentryCooldownMaxMs;
+    return computeAdaptiveCooldownMs(
+      typicalMove,
+      config.strategy.adaptiveReentryCooldownMinMs,
+      config.strategy.adaptiveReentryCooldownMaxMs,
+      config.strategy.adaptiveReentryCooldownFullAtVolatilityPercent,
+    );
+  }
+
   /** Ordinary adaptive rebuy distance below Slot A's last sell. */
   function computeCurrentRebuyDropPercent(): number {
     if (!config.strategy.adaptiveRebuyEnabled) return config.strategy.rebuyDropPercent;
@@ -917,6 +972,16 @@ async function main() {
     const flip = getFlip(slotKey);
     if (flip.phase !== "AWAITING_BUY") {
       if (opts.tag === "MANUAL") notify(`buy: Slot ${slotKey} already in a position - sell first.`);
+      return;
+    }
+    const cooldownRemainingMs = Math.max(
+      0,
+      s.slotReentryCooldownMs[slotKey] - (Date.now() - s.slotLastSellAtMs[slotKey]),
+    );
+    if (cooldownRemainingMs > 0) {
+      const msg = `Slot ${slotKey}: re-entry cooldown - next buy allowed in ${Math.ceil(cooldownRemainingMs / 1000)}s`;
+      if (opts.tag === "MANUAL") notify(msg);
+      else if (config.log.logSkips) log.info(msg);
       return;
     }
     const throttled = opts.tag === "AUTO" || isPendingRetry;
@@ -1055,7 +1120,7 @@ async function main() {
       s.paperTokenBalance += fill.outputAmountUi;
     }
 
-    const targetGainPercent = computeCurrentTargetGainPercent();
+    const targetGainPercent = computeTargetGainPercentFor(slotKey);
     const fillPriceUsd = (solIn * solUsd) / fill.outputAmountUi;
     setFlip(
       slotKey,
@@ -1218,6 +1283,8 @@ async function main() {
     const closingPosition = percentOfPosition >= 100;
     if (closingPosition) {
       setFlip(slotKey, afterSell(flip, fillPriceUsd, shouldRequireManualNextBuy(slotKey, tag)));
+      s.slotLastSellAtMs[slotKey] = Date.now();
+      s.slotReentryCooldownMs[slotKey] = computeCurrentReentryCooldownMs();
       trailingStopPendingSinceMs[slotKey] = null;
       peakUpdatedAtMs[slotKey] = null;
     } else {
@@ -1327,6 +1394,8 @@ async function main() {
           slotA: initialFlipState(),
           slotB: initialFlipState(),
           slotC: initialFlipState(),
+          slotLastSellAtMs: { A: 0, B: 0, C: 0 },
+          slotReentryCooldownMs: { A: 0, B: 0, C: 0 },
           paperSolBalance: config.paper.startingBalanceUsd / solUsd,
           paperTokenBalance: 0,
           realizedPnlUsd: 0,
@@ -1396,11 +1465,26 @@ async function main() {
       s.slotA.phase === "AWAITING_SELL" && s.slotA.buyPrice !== null && latestPriceUsd !== undefined
         ? grossMovePercent(s.slotA.buyPrice, latestPriceUsd)
         : undefined;
+    const cScalperRebuyDropPercent = computeCurrentSlotCScalperRebuyPercent();
     const reinforcement =
       slotKey === "B"
         ? { enabled: config.strategy.dualSlotEnabled, triggerDropPercent: computeCurrentTriggerDropPercent(), slotADrawdownPercent }
         : slotKey === "C"
-          ? { enabled: config.strategy.slotCEnabled, triggerDropPercent: computeCurrentSlotCTriggerDropPercent(), slotADrawdownPercent }
+          ? {
+              enabled: config.strategy.slotCEnabled,
+              triggerDropPercent: config.strategy.slotCScalperEnabled
+                ? config.strategy.slotCScalperZoneMinPercent
+                : computeCurrentSlotCTriggerDropPercent(),
+              slotADrawdownPercent,
+              zoneMaxDrawdownPercent: config.strategy.slotCScalperEnabled
+                ? config.strategy.slotCScalperZoneMaxPercent
+                : undefined,
+              rebuyDropPercent: config.strategy.slotCScalperEnabled ? cScalperRebuyDropPercent : undefined,
+              rebuyTriggerUsd:
+                config.strategy.slotCScalperEnabled && flip.lastSellPrice !== null
+                  ? flip.lastSellPrice * (1 - cScalperRebuyDropPercent / 100)
+                  : undefined,
+            }
           : undefined;
 
     const breakoutBuy =
@@ -1430,7 +1514,7 @@ async function main() {
       requireManualNextBuy: flip.requireManualNextBuy,
       completedFlips: flip.completedFlips,
       adaptiveTargetEnabled: config.strategy.adaptiveTargetEnabled,
-      nextTargetGainPercent: flip.phase === "AWAITING_BUY" ? computeCurrentTargetGainPercent() : undefined,
+      nextTargetGainPercent: flip.phase === "AWAITING_BUY" ? computeTargetGainPercentFor(slotKey) : undefined,
       staticTargetGainPercent: config.strategy.targetGainPercent,
       nextBuyUsdEstimate:
         flip.phase === "AWAITING_BUY" ? computeFixedSlotTradeUsd(s.initialPortfolioUsd, sizePercentFor(slotKey)) : undefined,
@@ -1445,6 +1529,10 @@ async function main() {
       autoBuyPausedSecondsLeft: isAutoBuyPaused(slotKey)
         ? Math.max(0, Math.ceil(((autoBuyPausedUntilMs[slotKey] ?? Date.now()) - Date.now()) / 1000))
         : undefined,
+      reentryCooldownSecondsLeft:
+        flip.phase === "AWAITING_BUY" && Date.now() - s.slotLastSellAtMs[slotKey] < s.slotReentryCooldownMs[slotKey]
+          ? Math.ceil((s.slotReentryCooldownMs[slotKey] - (Date.now() - s.slotLastSellAtMs[slotKey])) / 1000)
+          : undefined,
     };
   }
 
