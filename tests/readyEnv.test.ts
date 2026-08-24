@@ -16,6 +16,7 @@ describe("ready environment profiles", () => {
       const raw = parse(readFileSync(resolve(profile.file)));
       const config = loadConfig({
         ...raw,
+        SECRETS_ENV_FILE: "",
         // The distributable LIVE profile must keep the real secret blank.
         // loadConfig only needs a non-empty marker to validate the remaining
         // settings; wallet decoding happens later and is deliberately not run.
@@ -37,6 +38,17 @@ describe("ready environment profiles", () => {
       expect(config.trade.slotCSizePercent).toBe(30);
       expect(config.trade.minSolReserve).toBe(0.01);
       expect(config.strategy.breakoutBuyEnabled).toBe(true);
+      expect(config.strategy.adaptiveRebuyEnabled).toBe(true);
+      expect(config.strategy.adaptiveRebuyMinPercent).toBe(2);
+      expect(config.strategy.adaptiveRebuyMaxPercent).toBe(5);
+      expect(config.strategy.trailingStopArmPercent).toBe(2);
+      expect(config.strategy.trailingStopPercent).toBe(0.5);
+      expect(config.strategy.slotBTrailingStopArmPercent).toBe(2);
+      expect(config.strategy.slotBTrailingStopPercent).toBe(0.5);
+      expect(config.strategy.slotCTrailingStopArmPercent).toBe(2);
+      expect(config.strategy.slotCTrailingStopPercent).toBe(0.5);
+      expect(config.strategy.trailingStopConfirmationMs).toBe(4000);
+      expect(config.strategy.trailingStopConfirmationTolerancePercent).toBe(0.5);
       expect(config.strategy.slotCTriggerMinPercent).toBe(10);
       expect(config.strategy.slotCTriggerMaxPercent).toBe(22);
     });

@@ -1,3 +1,5 @@
+import { existsSync, readFileSync } from "node:fs";
+import { parse as parseDotenv } from "dotenv";
 import { z } from "zod";
 
 /**
@@ -15,6 +17,11 @@ const boolFlag = (fallback: boolean) =>
   );
 
 const envSchema = z.object({
+  // Optional separate file containing ONLY WALLET_PRIVATE_KEY and
+  // JUPITER_API_KEY. Strategy profiles can then be replaced/deployed without
+  // copying secrets around. Non-empty values in the main environment keep
+  // priority, so this remains backwards compatible with ordinary .env files.
+  SECRETS_ENV_FILE: z.string().default(""),
   WALLET_PRIVATE_KEY: z.string().default(""),
   JUPITER_API_KEY: z.string().default(""),
 
@@ -125,6 +132,13 @@ const envSchema = z.object({
   // How far below our last sell price the price must fall before we buy
   // back in. 0 = rebuy as soon as price is below the last sell.
   REBUY_DROP_PERCENT: numeric(0),
+  // Adaptive ordinary rebuy below the last sell. This is deliberately
+  // separate from BREAKOUT_BUY_*: rebuy follows a sell downward, while a
+  // breakout buy follows a new high and then a pullback.
+  ADAPTIVE_REBUY_ENABLED: boolFlag(false),
+  ADAPTIVE_REBUY_MULTIPLIER: numeric(0.5),
+  ADAPTIVE_REBUY_MIN_PERCENT: numeric(2),
+  ADAPTIVE_REBUY_MAX_PERCENT: numeric(5),
   // Refuse to trade at all if the live-estimated round-trip cost is above
   // this - a blown-out spread/impact means "don't trade this tick".
   MAX_ROUND_TRIP_COST_PERCENT: numeric(4),
@@ -275,6 +289,10 @@ function buildConfig(env: z.infer<typeof envSchema>) {
       targetGainPercent: env.TARGET_GAIN_PERCENT,
       minNetProfitPercent: env.MIN_NET_PROFIT_PERCENT,
       rebuyDropPercent: env.REBUY_DROP_PERCENT,
+      adaptiveRebuyEnabled: env.ADAPTIVE_REBUY_ENABLED,
+      adaptiveRebuyMultiplier: env.ADAPTIVE_REBUY_MULTIPLIER,
+      adaptiveRebuyMinPercent: env.ADAPTIVE_REBUY_MIN_PERCENT,
+      adaptiveRebuyMaxPercent: env.ADAPTIVE_REBUY_MAX_PERCENT,
       maxRoundTripCostPercent: env.MAX_ROUND_TRIP_COST_PERCENT,
       maxSpreadPercent: env.MAX_SPREAD_BPS / 100,
       stopLossPercent: env.STOP_LOSS_PERCENT,
@@ -331,7 +349,32 @@ function buildConfig(env: z.infer<typeof envSchema>) {
 }
 
 export function loadConfig(rawEnv: NodeJS.ProcessEnv = process.env): BotConfig {
-  const parsed = envSchema.parse(rawEnv);
+  const secretsFile = rawEnv.SECRETS_ENV_FILE?.trim();
+  let secretValues: Record<string, string> = {};
+  if (secretsFile) {
+    if (!existsSync(secretsFile)) {
+      throw new Error(`SECRETS_ENV_FILE does not exist: ${secretsFile}`);
+    }
+    const parsedFile = parseDotenv(readFileSync(secretsFile));
+    secretValues = {
+      WALLET_PRIVATE_KEY: parsedFile.WALLET_PRIVATE_KEY ?? "",
+      JUPITER_API_KEY: parsedFile.JUPITER_API_KEY ?? "",
+    };
+  }
+  const parsed = envSchema.parse({
+    ...rawEnv,
+    WALLET_PRIVATE_KEY: rawEnv.WALLET_PRIVATE_KEY || secretValues.WALLET_PRIVATE_KEY || "",
+    JUPITER_API_KEY: rawEnv.JUPITER_API_KEY || secretValues.JUPITER_API_KEY || "",
+  });
+  if (
+    parsed.ADAPTIVE_REBUY_MIN_PERCENT < 0 ||
+    parsed.ADAPTIVE_REBUY_MAX_PERCENT < parsed.ADAPTIVE_REBUY_MIN_PERCENT ||
+    parsed.ADAPTIVE_REBUY_MULTIPLIER < 0
+  ) {
+    throw new Error(
+      "Adaptive rebuy requires 0 <= ADAPTIVE_REBUY_MIN_PERCENT <= ADAPTIVE_REBUY_MAX_PERCENT and a non-negative multiplier.",
+    );
+  }
   if (parsed.TRADING_MODE === "live" && !parsed.WALLET_PRIVATE_KEY) {
     throw new Error("WALLET_PRIVATE_KEY is required when TRADING_MODE=live.");
   }

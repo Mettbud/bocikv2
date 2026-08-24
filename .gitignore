@@ -7,4 +7,6 @@ data/
 .env
 .env.b
 .env.c
+secrets.env
+*.secrets.env
 *.log

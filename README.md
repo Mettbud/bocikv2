@@ -413,6 +413,24 @@ tests/
 
 ## Uruchomienie
 
+Sekrety można trzymać poza zwykłym profilem strategii. Skopiuj
+`secrets.env.example` jako `secrets.env`, wpisz tam wyłącznie
+`WALLET_PRIVATE_KEY` i `JUPITER_API_KEY`, a w profilu pozostaw
+`SECRETS_ENV_FILE=./secrets.env`. Plik `secrets.env` jest ignorowany przez
+Git. Dzięki temu można podmieniać całe profile A/B/C bez ponownego kopiowania
+kluczy. Wartości wpisane bezpośrednio w głównym `.env` mają pierwszeństwo dla
+zgodności ze starszą konfiguracją.
+
+Aktualny profil A/B/C używa dwóch niezależnych adaptacyjnych wejść Slotu A:
+
+- zwykły odkup 2–5% poniżej ostatniej sprzedaży (`ADAPTIVE_REBUY_*`),
+- kupno po wybiciu po cofnięciu 2–10% od nowego szczytu (`BREAKOUT_BUY_*`).
+
+Trailing wszystkich slotów uzbraja się po +2% od wejścia i rozważa sprzedaż
+po cofnięciu 0,5% od późniejszego szczytu. Cofnięcie musi zostać potwierdzone
+przez 4 sekundy; bufor 0,5 punktu procentowego podtrzymuje licznik podczas
+małego odbicia, ale nie rozluźnia właściwej ceny sprzedaży.
+
 ```bash
 npm install
 cp .env.example .env      # uzupełnij WALLET_PRIVATE_KEY/JUPITER_API_KEY tylko dla trybu live

@@ -486,7 +486,7 @@ async function main() {
 
     // The spread gate itself lives in executeBuy (it applies to manual buys
     // too) - this just decides whether it's worth checking this tick at all.
-    if (isBuySignal(s.slotA, currentPriceUsd, config.strategy.rebuyDropPercent, config.strategy.slotARequireManualFirstBuy)) {
+    if (isBuySignal(s.slotA, currentPriceUsd, computeCurrentRebuyDropPercent(), config.strategy.slotARequireManualFirstBuy)) {
       await executeBuy("A", undefined, { requireCostGate: true, tag: "AUTO" });
       return;
     }
@@ -800,6 +800,19 @@ async function main() {
       config.strategy.adaptiveTargetMultiplier,
       config.strategy.adaptiveTargetMinPercent,
       config.strategy.adaptiveTargetMaxPercent,
+    );
+  }
+
+  /** Ordinary adaptive rebuy distance below Slot A's last sell. */
+  function computeCurrentRebuyDropPercent(): number {
+    if (!config.strategy.adaptiveRebuyEnabled) return config.strategy.rebuyDropPercent;
+    const typicalMove = currentTypicalMovePercent();
+    if (typicalMove === undefined) return config.strategy.adaptiveRebuyMaxPercent;
+    return computeAdaptiveTargetPercent(
+      typicalMove,
+      config.strategy.adaptiveRebuyMultiplier,
+      config.strategy.adaptiveRebuyMinPercent,
+      config.strategy.adaptiveRebuyMaxPercent,
     );
   }
 
@@ -1393,14 +1406,17 @@ async function main() {
           }
         : undefined;
 
+    const rebuyDropPercent = computeCurrentRebuyDropPercent();
+
     return {
       label: slotKey,
       sizePercent: sizePercentFor(slotKey),
       position,
       rebuyTriggerUsd:
         slotKey === "A" && flip.phase === "AWAITING_BUY" && flip.lastSellPrice !== null
-          ? flip.lastSellPrice * (1 - config.strategy.rebuyDropPercent / 100)
+          ? flip.lastSellPrice * (1 - rebuyDropPercent / 100)
           : undefined,
+      rebuyDropPercent: slotKey === "A" ? rebuyDropPercent : undefined,
       lastSellPriceUsd: flip.lastSellPrice ?? undefined,
       requireManualNextBuy: flip.requireManualNextBuy,
       completedFlips: flip.completedFlips,

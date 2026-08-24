@@ -85,9 +85,9 @@ describe("formatDashboard", () => {
   it("shows the rebuy trigger for Slot A once a prior sell exists", () => {
     const out = formatDashboard({
       ...base,
-      slotA: { ...flatSlotA, rebuyTriggerUsd: 0.025, lastSellPriceUsd: 0.026 },
+      slotA: { ...flatSlotA, rebuyTriggerUsd: 0.025, rebuyDropPercent: 3.85, lastSellPriceUsd: 0.026 },
     });
-    expect(out).toContain("Odkup poniżej:");
+    expect(out).toContain("Odkup adaptacyjny -3.85%:");
   });
 
   it("shows a waiting-for-manual-buy indicator instead of the rebuy trigger after a manual/panic sell", () => {

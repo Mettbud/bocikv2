@@ -46,6 +46,8 @@ export interface SlotDashboardState {
   position: PositionSnapshot | undefined;
   /** Slot A only: rebuy trigger below its own last sell. Slots B/C never rebuy on their own. */
   rebuyTriggerUsd: number | undefined;
+  /** Slot A only: current static/adaptive distance below the last sell. */
+  rebuyDropPercent?: number;
   lastSellPriceUsd: number | undefined;
   /** true if the last sell on this slot was a manual "sell" or "panic" - blocks every automatic buy path until a manual "buy". */
   requireManualNextBuy: boolean;
@@ -247,7 +249,10 @@ function formatSlot(slot: SlotDashboardState, tokenSymbol: string): string[] {
   } else {
     lines.push("  Pozycja: brak - czeka na sygnał kupna");
     if (slot.rebuyTriggerUsd !== undefined) {
-      lines.push(`  Odkup poniżej: ${usd(slot.rebuyTriggerUsd, 8)} (ostatnia sprzedaż ${usd(slot.lastSellPriceUsd, 8)})`);
+      lines.push(
+        `  Odkup adaptacyjny -${(slot.rebuyDropPercent ?? 0).toFixed(2)}%: ${usd(slot.rebuyTriggerUsd, 8)} ` +
+          `(ostatnia sprzedaż ${usd(slot.lastSellPriceUsd, 8)})`,
+      );
     } else {
       lines.push("  Pierwsze wejście - kupi przy najbliższym ticku.");
     }

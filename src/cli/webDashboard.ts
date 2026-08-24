@@ -421,7 +421,10 @@ function renderSlotBody(slot, tokenSymbol) {
   } else {
     html += row("Pozycja", '<span class="muted">brak - czeka na sygnał kupna</span>');
     if (slot.rebuyTriggerUsd !== undefined) {
-      html += row("Odkup poniżej", usd(slot.rebuyTriggerUsd, 8) + " (ostatnia sprzedaż " + usd(slot.lastSellPriceUsd, 8) + ")");
+      html += row(
+        "Odkup adaptacyjny -" + (slot.rebuyDropPercent ?? 0).toFixed(2) + "%",
+        usd(slot.rebuyTriggerUsd, 8) + " (ostatnia sprzedaż " + usd(slot.lastSellPriceUsd, 8) + ")",
+      );
     } else {
       html += row("Info", "pierwsze wejście - kupi przy najbliższym ticku");
     }
