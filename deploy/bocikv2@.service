@@ -1,0 +1,35 @@
+[Unit]
+Description=bocikv2 trading bot instance %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=bocikv2
+Group=bocikv2
+WorkingDirectory=/opt/bocikv2
+Environment=NODE_ENV=production
+Environment=DOTENV_CONFIG_PATH=/etc/bocikv2/%i.env
+ExecStart=/usr/local/bin/node --max-old-space-size=180 /opt/bocikv2/dist/src/index.js
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=30
+KillSignal=SIGTERM
+UMask=0077
+
+# Mikrus has 1 GiB RAM. Each instance gets a hard ceiling so one runaway
+# process cannot starve SSH or the other bot instances.
+MemoryHigh=220M
+MemoryMax=260M
+TasksMax=128
+
+# The dashboard intentionally listens on 127.0.0.1. Access it through SSH;
+# do not expose its command endpoints directly to the Internet.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/bocikv2/data
+
+[Install]
+WantedBy=multi-user.target
