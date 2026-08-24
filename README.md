@@ -534,8 +534,8 @@ slotu: `Auto-kupno WSTRZYMANE (Xs)`.
 
 Jeśli problem nie ustępuje - kolejny cykl 3 nieudanych prób z rzędu po
 wznowieniu - cooldown **podwaja się** przy każdym kolejnym wstrzymaniu
-(5 min → 10 min → 20 min → ...), aż do sufitu `AUTO_BUY_MAX_COOLDOWN_MS`
-(domyślnie 1 godzina). Eskalacja resetuje się do zera po pierwszym udanym
+(5 min → 10 min → 20 min → 30 min, sufit `AUTO_BUY_MAX_COOLDOWN_MS`,
+domyślnie 30 minut). Eskalacja resetuje się do zera po pierwszym udanym
 automatycznym kupnie. Dzięki temu bot nie wali RPC/Jupitera w nieskończoność
 identycznym failującym requestem co kilkanaście sekund przez całą noc, ale
 też nie próbuje w kółko z tą samą częstotliwością bez końca, jeśli problem

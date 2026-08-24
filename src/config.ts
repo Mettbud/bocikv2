@@ -43,12 +43,12 @@ const envSchema = z.object({
   // Manual "buy" always still works. See AUTO_BUY_COOLDOWN_MS below.
   AUTO_BUY_FAILURE_LIMIT: numeric(3),
   // How long a pause lasts the FIRST time it triggers. Doubles each time it
-  // re-triggers without a successful buy in between (5 -> 10 -> 20 -> 40
-  // min...), capped at AUTO_BUY_MAX_COOLDOWN_MS - a persistent problem gets
+  // re-triggers without a successful buy in between (5 -> 10 -> 20 -> 30
+  // min, capped), at AUTO_BUY_MAX_COOLDOWN_MS - a persistent problem gets
   // backed off harder over time instead of hammering on the same fixed
   // interval forever. Resets to this base value on any successful buy.
   AUTO_BUY_COOLDOWN_MS: numeric(5 * 60 * 1000),
-  AUTO_BUY_MAX_COOLDOWN_MS: numeric(60 * 60 * 1000),
+  AUTO_BUY_MAX_COOLDOWN_MS: numeric(30 * 60 * 1000),
 
   // Two independent slots, each sized as a fixed % of the STARTING
   // portfolio value (PAPER_BALANCE_USD in paper mode, or whatever the
