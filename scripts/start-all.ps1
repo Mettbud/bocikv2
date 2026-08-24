@@ -1,5 +1,6 @@
 # Uruchamia wszystkie skonfigurowane instancje bota (A/B/C), każdą w
-# osobnym oknie PowerShell, jedną komendą.
+# osobnym oknie PowerShell, jedną komendą - i, dla każdej z nich, gdzie
+# DASHBOARD_WEB_ENABLED=true, otwiera jej webowy dashboard w przeglądarce.
 #
 #   .\scripts\start-all.ps1
 #
@@ -29,19 +30,52 @@ function Start-BotWindow {
     Start-Process powershell -WorkingDirectory $projectDir -ArgumentList "-NoExit", "-Command", $command
 }
 
+# Reads DASHBOARD_WEB_ENABLED/DASHBOARD_WEB_PORT straight out of the given
+# .env file (read-only - never echoes the rest of the file, which has
+# secrets) and returns that instance's dashboard URL, or $null if it
+# doesn't have the web dashboard turned on.
+function Get-DashboardUrl {
+    param([string]$EnvFileName)  # "" = default .env
+    $path = Join-Path $projectDir ($(if ($EnvFileName) { $EnvFileName } else { ".env" }))
+    if (-not (Test-Path $path)) { return $null }
+    $content = Get-Content $path -Raw
+    if ($content -notmatch "(?m)^DASHBOARD_WEB_ENABLED=true\s*$") { return $null }
+    $port = 4173
+    if ($content -match "(?m)^DASHBOARD_WEB_PORT=(\d+)\s*$") { $port = $Matches[1] }
+    return "http://127.0.0.1:$port"
+}
+
+$dashboardUrls = @()
+
 Write-Host "Startuje Slot A (.env)..."
 Start-BotWindow -Title "bocik - wersja A" -EnvPath ""
+$dashboardUrls += Get-DashboardUrl -EnvFileName ""
 
 Start-Sleep -Seconds 1
 Write-Host "Startuje wersje B (.env.b)..."
 Start-BotWindow -Title "bocik - wersja B" -EnvPath ".env.b"
+$dashboardUrls += Get-DashboardUrl -EnvFileName ".env.b"
 
 if (Test-Path (Join-Path $projectDir ".env.c")) {
     Start-Sleep -Seconds 1
     Write-Host "Startuje wersje C (.env.c)..."
     Start-BotWindow -Title "bocik - wersja C" -EnvPath ".env.c"
+    $dashboardUrls += Get-DashboardUrl -EnvFileName ".env.c"
 } else {
     Write-Host "Pomijam wersje C - brak pliku .env.c."
 }
 
 Write-Host "Gotowe - kazda wersja w osobnym oknie."
+
+$dashboardUrls = $dashboardUrls | Where-Object { $_ }
+if ($dashboardUrls.Count -gt 0) {
+    Write-Host "Czekam, az boty wystartuja, zeby otworzyc ich dashboardy w przegladarce..."
+    Start-Sleep -Seconds 6
+    foreach ($url in $dashboardUrls) {
+        Write-Host "Otwieram $url"
+        Start-Process $url
+    }
+} else {
+    Write-Host "Zaden .env nie ma DASHBOARD_WEB_ENABLED=true - pomijam otwieranie przegladarki."
+    Write-Host "(Dodaj DASHBOARD_WEB_ENABLED=true w .env / .env.b / .env.c, zeby to wlaczyc.)"
+}
