@@ -2,7 +2,6 @@
 Description=Cloudflare Quick Tunnel for bocikv2 read-only dashboard
 After=network-online.target bocikv2@a.service
 Wants=network-online.target
-Requires=bocikv2@a.service
 
 [Service]
 Type=simple
