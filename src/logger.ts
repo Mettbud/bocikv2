@@ -1,6 +1,7 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { BotConfig } from "./config.js";
+import { prepareForExternalWrite } from "./cli/dashboard.js";
 
 const LEVELS = ["debug", "info", "warn", "error"] as const;
 type Level = (typeof LEVELS)[number];
@@ -21,6 +22,7 @@ export function createLogger(config: BotConfig): Logger {
     const line = `${new Date().toISOString()} [${level.toUpperCase()}] ${msg}${
       meta ? " " + JSON.stringify(meta) : ""
     }`;
+    prepareForExternalWrite();
     // eslint-disable-next-line no-console
     console.log(line);
     try {
