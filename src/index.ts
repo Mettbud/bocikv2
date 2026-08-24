@@ -129,6 +129,15 @@ async function main() {
   let latestTokenBalance = 0;
   let latestSolUsd: number | undefined;
   const live: Record<SlotKey, SlotLive> = { A: freshSlotLive(), B: freshSlotLive(), C: freshSlotLive() };
+  // Guards against a double buy/sell on the same slot: the automatic tick
+  // loop and manual commands (or the pending-limit-buy checker) run as
+  // independent async flows, and executeBuy/fillSell each await several
+  // network calls (price, quote, on-chain execution) between checking the
+  // slot's phase and actually updating it - without this, two calls
+  // starting close together could both pass that check before either
+  // finishes and both really execute. The check-and-set here happens
+  // synchronously (no await in between), so it can't itself race.
+  const slotLocks: Record<SlotKey, boolean> = { A: false, B: false, C: false };
   // Rolling in-memory price history driving the adaptive target/trigger -
   // not persisted, so it starts empty on every restart (falls back to
   // static/conservative defaults until enough of it has been rebuilt).
@@ -731,7 +740,24 @@ async function main() {
       if (opts.tag === "MANUAL") console.log(`buy: Slot ${slotKey} already in a position - sell first.`);
       return;
     }
+    if (slotLocks[slotKey]) {
+      if (opts.tag === "MANUAL") console.log(`buy: Slot ${slotKey} is mid-transaction - try again in a moment.`);
+      return;
+    }
+    slotLocks[slotKey] = true;
+    try {
+      await executeBuyLocked(slotKey, flip, usdAmountOverride, opts);
+    } finally {
+      slotLocks[slotKey] = false;
+    }
+  }
 
+  async function executeBuyLocked(
+    slotKey: SlotKey,
+    flip: FlipState,
+    usdAmountOverride: number | undefined,
+    opts: { requireCostGate: boolean; tag: "AUTO" | "MANUAL" },
+  ): Promise<void> {
     const solUsd = await solPrice.getPrice();
     const solBalance = config.mode === "live" && owner ? await getSolBalanceSol(connection, owner) : s.paperSolBalance;
 
@@ -936,7 +962,31 @@ async function main() {
   ): Promise<void> {
     const flip = getFlip(slotKey);
     if (flip.buyPrice === null || flip.entryCost === null) return;
+    if (slotLocks[slotKey]) {
+      console.log(`sell: Slot ${slotKey} is mid-transaction - try again in a moment.`);
+      return;
+    }
+    slotLocks[slotKey] = true;
+    try {
+      await fillSellLocked(slotKey, flip, sell, tokenAmount, solUsd, gross, roundTripCostPercent, net, tag, percentOfPosition);
+    } finally {
+      slotLocks[slotKey] = false;
+    }
+  }
 
+  async function fillSellLocked(
+    slotKey: SlotKey,
+    flip: FlipState,
+    sell: Awaited<ReturnType<typeof priceLeg>>,
+    tokenAmount: number,
+    solUsd: number,
+    gross: number,
+    roundTripCostPercent: number,
+    net: number,
+    tag: "AUTO" | "MANUAL" | "PANIC" | "STOP_LOSS" | "TRAILING_STOP" | "STAGNATION",
+    percentOfPosition: number,
+  ): Promise<void> {
+    if (flip.entryCost === null) return; // already validated by the caller - narrows the type below
     const fill = await executeLeg(connection, config, keypair, sell.quote, sell.swap, solDecimals);
     const solOut = fill.outputAmountUi;
     const proceedsUsd = solOut * solUsd;
