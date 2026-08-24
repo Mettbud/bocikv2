@@ -159,6 +159,21 @@ async function main() {
   // and a retry is due; only a real success resets it.
   const autoBuyEscalation: Record<SlotKey, number> = { A: 0, B: 0, C: 0 };
 
+  // Consecutive tick failures per slot, purely for log noise control (NOT
+  // gating retries - a failing sell must always keep retrying). The first
+  // failure in a streak logs the full error (so it's diagnosable); repeats
+  // of the *same* error collapse to a one-liner instead of dumping the
+  // full raw simulation log block again every ~15-25s. Must be declared
+  // before tickLoop starts running below (not after) - tickLoop's async
+  // IIFE starts calling into tick() -> evaluateSlotSafely immediately, so a
+  // `const` declared later in this function is still in the temporal dead
+  // zone the first time evaluateSlotSafely's catch block tries to read it.
+  const tickFailureStreak: Record<SlotKey, { count: number; message: string }> = {
+    A: { count: 0, message: "" },
+    B: { count: 0, message: "" },
+    C: { count: 0, message: "" },
+  };
+
   function isAutoBuyPaused(slotKey: SlotKey): boolean {
     const until = autoBuyPausedUntilMs[slotKey];
     if (until === null) return false;
@@ -328,12 +343,13 @@ async function main() {
         lastTickFailureMessage = "";
       } catch (err) {
         lastErrorMessage = String((err as Error).message ?? err);
-        if (tickFailureCount > 0 && lastTickFailureMessage === lastErrorMessage) {
+        const signature = errorSignature(lastErrorMessage);
+        if (tickFailureCount > 0 && lastTickFailureMessage === signature) {
           tickFailureCount += 1;
           log.error(`tick failed (${tickFailureCount}x in a row, same error as before)`);
         } else {
           tickFailureCount = 1;
-          lastTickFailureMessage = lastErrorMessage;
+          lastTickFailureMessage = signature;
           log.error("tick failed", { error: lastErrorMessage });
         }
       }
@@ -395,29 +411,19 @@ async function main() {
     await evaluateSlotSafely("C", () => evaluateSlotC(currentPriceUsd, solUsd));
   }
 
-  // Consecutive tick failures per slot, purely for log noise control (NOT
-  // gating retries - a failing sell must always keep retrying). The first
-  // failure in a streak logs the full error (so it's diagnosable); repeats
-  // of the *same* error collapse to a one-liner instead of dumping the
-  // full raw simulation log block again every ~15-25s.
-  const tickFailureStreak: Record<SlotKey, { count: number; message: string }> = {
-    A: { count: 0, message: "" },
-    B: { count: 0, message: "" },
-    C: { count: 0, message: "" },
-  };
-
   async function evaluateSlotSafely(slotKey: SlotKey, run: () => Promise<void>): Promise<void> {
     try {
       await run();
       tickFailureStreak[slotKey] = { count: 0, message: "" };
     } catch (err) {
       lastErrorMessage = String((err as Error).message ?? err);
+      const signature = errorSignature(lastErrorMessage);
       const streak = tickFailureStreak[slotKey];
-      if (streak.count > 0 && streak.message === lastErrorMessage) {
+      if (streak.count > 0 && streak.message === signature) {
         streak.count += 1;
         log.error(`Slot ${slotKey}: tick evaluation still failing (${streak.count}x in a row, same error as before)`);
       } else {
-        tickFailureStreak[slotKey] = { count: 1, message: lastErrorMessage };
+        tickFailureStreak[slotKey] = { count: 1, message: signature };
         log.error(`Slot ${slotKey}: tick evaluation failed`, { error: lastErrorMessage });
       }
     }
@@ -1455,6 +1461,22 @@ function round8(n: number): number {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Collapses an error message down to a stable "is this the same underlying
+ * failure recurring" signature, for the repeat-failure log quieting above.
+ * A raw simulation failure's message embeds things that legitimately change
+ * between otherwise-identical attempts (e.g. "consumed 1013 of 1386287
+ * compute units" - the exact figure isn't identical every retry even when
+ * the actual failure, like a fixed 0x1788 program error, is), so comparing
+ * full message strings for equality would almost never match and defeat
+ * the quieting entirely. Falls back to the full message when there's no
+ * program error code to key off of.
+ */
+function errorSignature(message: string): string {
+  const match = message.match(/custom program error: (0x[0-9a-fA-F]+)/);
+  return match?.[1] ?? message;
 }
 
 main().catch((err) => {
