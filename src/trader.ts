@@ -66,9 +66,64 @@ export async function priceLeg(
 }
 
 /**
+ * Reads what a confirmed swap actually delivered, instead of trusting the
+ * pre-trade quote estimate. Jupiter's Route only guarantees the output
+ * meets the slippage-adjusted minimum, not the quoted `outAmount` itself -
+ * real fills routinely land a bit below quote. If the bot keeps recording
+ * the optimistic quote amount as the position size, that gap compounds
+ * across flips until the tracked balance no longer matches the wallet and
+ * every subsequent sell is rejected with "insufficient funds" before it
+ * ever reaches an AMM.
+ *
+ * Returns undefined (caller falls back to the quote estimate) whenever the
+ * transaction's balance deltas can't be read - this must never throw and
+ * must never block a fill that otherwise confirmed fine on-chain.
+ */
+export async function getActualOutputAmountUi(
+  connection: Connection,
+  signature: string,
+  outputMint: string,
+  nativeSolMint: string,
+  owner: string,
+): Promise<number | undefined> {
+  try {
+    const tx = await connection.getTransaction(signature, {
+      commitment: "confirmed",
+      maxSupportedTransactionVersion: 0,
+    });
+    const meta = tx?.meta;
+    if (!meta) return undefined;
+
+    if (outputMint === nativeSolMint) {
+      // Native SOL isn't an SPL token balance - read it off the fee
+      // payer's lamport balance. The fee payer is always account index 0
+      // in a Solana transaction message, and it's the same keypair that
+      // signs here, so this is exactly the wallet we care about. Add back
+      // the network fee since it's deducted from the same balance.
+      const pre = meta.preBalances?.[0];
+      const post = meta.postBalances?.[0];
+      if (pre === undefined || post === undefined) return undefined;
+      const receivedLamports = post - pre + meta.fee;
+      return receivedLamports > 0 ? receivedLamports / LAMPORTS_PER_SOL : undefined;
+    }
+
+    const pre = meta.preTokenBalances?.find((b) => b.mint === outputMint && b.owner === owner);
+    const post = meta.postTokenBalances?.find((b) => b.mint === outputMint && b.owner === owner);
+    if (!post) return undefined;
+    const preAmount = pre?.uiTokenAmount.uiAmount ?? 0;
+    const postAmount = post.uiTokenAmount.uiAmount ?? 0;
+    const delta = postAmount - preAmount;
+    return delta > 0 ? delta : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Executes a leg. In paper mode this just formats the already-fetched
  * quote into a fill (no network send). In live mode it signs and submits
- * the pre-built swap transaction.
+ * the pre-built swap transaction, then reconciles the fill against what
+ * actually landed on-chain (see getActualOutputAmountUi).
  */
 export async function executeLeg(
   connection: Connection,
@@ -126,12 +181,20 @@ export async function executeLeg(
     throw new Error(`Swap transaction ${signature} did not confirm in time.`);
   }
 
+  const actualOutputAmountUi = await getActualOutputAmountUi(
+    connection,
+    signature,
+    quote.outputMint,
+    config.token.solMint,
+    keypair.publicKey.toBase58(),
+  );
+
   return {
     quote,
     priceImpactPercent: impact,
     networkFeeLamports:
       BASE_SIGNATURE_FEE_LAMPORTS + (swap.prioritizationFeeLamports ?? config.execution.priorityMaxLamports),
-    outputAmountUi,
+    outputAmountUi: actualOutputAmountUi ?? outputAmountUi,
     txSignature: signature,
   };
 }
