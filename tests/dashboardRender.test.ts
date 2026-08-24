@@ -53,7 +53,7 @@ async function freshDashboardModule() {
   return import("../src/cli/dashboard.js");
 }
 
-describe("renderDashboard / notifyExternalStdoutWrite", () => {
+describe("renderDashboard / prepareForExternalWrite", () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let writeSpy: any;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -93,18 +93,29 @@ describe("renderDashboard / notifyExternalStdoutWrite", () => {
     expect(writeSpy).toHaveBeenCalledWith(`\x1b[${expectedRows}A\x1b[0J`);
   });
 
-  it("prints fresh, without an erase, right after an external stdout write", async () => {
-    const { renderDashboard, notifyExternalStdoutWrite } = await freshDashboardModule();
+  it("reclaims its own space (cursor up + erase) when prepareForExternalWrite is called before a log line", async () => {
+    const { renderDashboard, prepareForExternalWrite } = await freshDashboardModule();
     renderDashboard(minimalState); // first render - full clear
+    const firstBody = logSpy.mock.calls[0]?.[0] as string;
+    const expectedRows = firstBody.split("\n").length;
     writeSpy.mockClear();
 
-    notifyExternalStdoutWrite(); // simulates a logger.info() call in between
-    renderDashboard(minimalState);
+    prepareForExternalWrite(); // what the logger does right before console.log(line)
+    expect(writeSpy).toHaveBeenCalledWith(`\x1b[${expectedRows}A\x1b[0J`);
 
-    // No cursor-up/erase sequence - a log line may be sitting right above
-    // the cursor and must not be clobbered.
+    // With the dashboard's space reclaimed, the log line is the only new
+    // content; the next render must print fresh below it rather than try
+    // to erase over the log line it doesn't know about.
+    writeSpy.mockClear();
+    renderDashboard(minimalState);
     for (const call of writeSpy.mock.calls) {
       expect(call[0]).not.toMatch(/\x1b\[\d+A/);
     }
+  });
+
+  it("does nothing when prepareForExternalWrite is called with no prior render", async () => {
+    const { prepareForExternalWrite } = await freshDashboardModule();
+    prepareForExternalWrite();
+    expect(writeSpy).not.toHaveBeenCalled();
   });
 });

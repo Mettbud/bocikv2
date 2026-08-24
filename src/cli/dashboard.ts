@@ -321,16 +321,25 @@ let clearedScrollbackOnce = false;
 let previousRenderRowCount = 0;
 
 /**
- * Tells the dashboard that something else (a log line) wrote to stdout
- * outside of renderDashboard(). The cursor is no longer sitting right
- * after our own last render - moving up by the old row count would land
- * in the wrong place and corrupt/erase that other output - so the next
- * render falls back to printing fresh below it instead of trying to
- * redraw in place. Call this from anything that console.log's on its own,
- * e.g. the logger.
+ * Reclaims the dashboard's own screen space before something else (a log
+ * line) writes to stdout outside of renderDashboard(). Must be called
+ * BEFORE that write, not after: if the log gets printed first, its text
+ * ends up sitting right where the old dashboard was, so erasing
+ * afterwards would either wipe the log itself or land in the wrong
+ * place. Erasing first means the log becomes the only new content, and
+ * the next renderDashboard() call simply prints a fresh frame below it
+ * instead of trying to redraw over unknown territory.
+ *
+ * Skipping this (i.e. letting a log print past a live dashboard
+ * uncleared) is what caused the dashboard to visibly grow forever: every
+ * log line left a whole stale copy of the dashboard behind it, on top of
+ * the fresh one the next render added.
  */
-export function notifyExternalStdoutWrite(): void {
-  previousRenderRowCount = 0;
+export function prepareForExternalWrite(): void {
+  if (previousRenderRowCount > 0) {
+    process.stdout.write(`\x1b[${previousRenderRowCount}A\x1b[0J`);
+    previousRenderRowCount = 0;
+  }
 }
 
 export function renderDashboard(s: DashboardState): void {
