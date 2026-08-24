@@ -20,6 +20,7 @@ const flatSlotA: SlotDashboardState = {
   reinforcement: undefined,
   breakoutBuy: undefined,
   pendingManualBuy: undefined,
+  autoBuyPausedSecondsLeft: undefined,
 };
 
 const flatSlotB: SlotDashboardState = {

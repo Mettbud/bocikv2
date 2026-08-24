@@ -33,14 +33,21 @@ export interface CommandDeps {
   onExit: () => void;
 }
 
-/** Wires up interactive stdin commands: buy/sell/panic/reset/status/quit. */
-export function startCommandLoop(deps: CommandDeps): void {
+/**
+ * Wires up interactive stdin commands: buy/sell/panic/reset/status/quit.
+ * Returns the readline interface so the caller can check `.line` (the
+ * partially-typed command, if any) before doing a full-screen dashboard
+ * redraw - without that, a redraw mid-keystroke wipes out whatever the
+ * user was typing, since it clears the whole terminal.
+ */
+export function startCommandLoop(deps: CommandDeps): ReturnType<typeof createInterface> {
   const rl = createInterface({ input: process.stdin });
   rl.on("line", (line) => {
     void handleLine(line.trim(), deps).catch((err) => {
       deps.logger.error(`command failed: ${String((err as Error).message ?? err)}`);
     });
   });
+  return rl;
 }
 
 function parseSlot(token: string | undefined): SlotKey | undefined {

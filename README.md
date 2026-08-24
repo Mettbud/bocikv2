@@ -514,6 +514,28 @@ stop faktycznie zadziałał vs. ile razy był to fałszywy alarm odfiltrowany
 przez
 potwierdzenie.
 
+## Gdy auto-kupno przestaje się udawać (circuit breaker)
+
+Każda próba kupna jest najpierw **symulowana** przez sieć Solana, zanim
+cokolwiek faktycznie się wykona - jeśli symulacja się nie powiedzie
+(np. `custom program error`), transakcja **nigdy nie trafia na
+blockchain**, więc nic nie jest tracone. Ale jeśli token ma jakąś
+nietypową charakterystykę (np. opłatę przy transferze), która systematycznie
+nie zgadza się z tym, co zakłada prosta wycena Jupitera, każda kolejna
+próba może failować identycznie w kółko.
+
+Po `AUTO_BUY_FAILURE_LIMIT` (domyślnie 3) nieudanych próbach **z rzędu** dla
+danego slotu, bot **wstrzymuje automatyczne kupno tego slotu** na
+`AUTO_BUY_COOLDOWN_MS` (domyślnie 10 minut), zamiast próbować w kółko co
+tick bez końca. Ręczne `buy`/`buy ... @cena` nadal działa normalnie w tym
+czasie. Licznik i wstrzymanie resetują się przy pierwszym udanym kupnie
+(automatycznym albo ręcznym). Dashboard pokazuje to wyraźnie w bloku danego
+slotu: `Auto-kupno WSTRZYMANE (Xs)`.
+
+Osobno: błąd w jednym slocie (np. Slot B ciągle failuje) **nigdy nie
+blokuje** ewaluacji pozostałych slotów w tym samym ticku - każdy slot jest
+sprawdzany niezależnie, z własnym łapaniem błędów.
+
 ## Świadome uproszczenia względem `botrade`
 
 Ten bot **nie** ma: kaskadowego take-profit, blokady zysku (profit lock),

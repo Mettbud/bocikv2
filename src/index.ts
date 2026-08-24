@@ -138,6 +138,41 @@ async function main() {
   // finishes and both really execute. The check-and-set here happens
   // synchronously (no await in between), so it can't itself race.
   const slotLocks: Record<SlotKey, boolean> = { A: false, B: false, C: false };
+  // Circuit breaker for AUTOMATIC buys only (never sells - a struggling
+  // sell should keep retrying, since leaving a position unmanaged is the
+  // worse outcome). A token that's structurally incompatible with a plain
+  // quote/swap (e.g. an unusual transfer mechanism) can fail identically on
+  // every single attempt - without this, the bot would hammer the same
+  // doomed buy every tick forever, burning RPC/Jupiter calls for nothing.
+  // Resets to 0 on any successful buy (auto or manual) for that slot.
+  const AUTO_BUY_FAILURE_LIMIT = 3;
+  const AUTO_BUY_COOLDOWN_MS = 10 * 60 * 1000;
+  const autoBuyFailures: Record<SlotKey, number> = { A: 0, B: 0, C: 0 };
+  const autoBuyPausedUntilMs: Record<SlotKey, number | null> = { A: null, B: null, C: null };
+
+  function isAutoBuyPaused(slotKey: SlotKey): boolean {
+    const until = autoBuyPausedUntilMs[slotKey];
+    if (until === null) return false;
+    if (Date.now() >= until) {
+      autoBuyPausedUntilMs[slotKey] = null;
+      autoBuyFailures[slotKey] = 0;
+      return false;
+    }
+    return true;
+  }
+
+  function registerAutoBuyFailure(slotKey: SlotKey, err: unknown): void {
+    autoBuyFailures[slotKey] += 1;
+    log.error(`Slot ${slotKey}: auto-buy failed (${autoBuyFailures[slotKey]}/${AUTO_BUY_FAILURE_LIMIT} in a row)`, {
+      error: String((err as Error).message ?? err),
+    });
+    if (autoBuyFailures[slotKey] >= AUTO_BUY_FAILURE_LIMIT) {
+      autoBuyPausedUntilMs[slotKey] = Date.now() + AUTO_BUY_COOLDOWN_MS;
+      const msg = `Slot ${slotKey}: auto-buy WSTRZYMANE na ${Math.round(AUTO_BUY_COOLDOWN_MS / 60000)} min po ${AUTO_BUY_FAILURE_LIMIT} nieudanych próbach z rzędu (prawdopodobnie problem strukturalny, nie zwykły poślizg) - ręczne "buy" nadal działa`;
+      setEvent(msg);
+      log.warn(msg);
+    }
+  }
   // Rolling in-memory price history driving the adaptive target/trigger -
   // not persisted, so it starts empty on every restart (falls back to
   // static/conservative defaults until enough of it has been rebuilt).
@@ -168,6 +203,19 @@ async function main() {
 
   const setEvent = (message: string) => {
     lastEvent = { message, atMs: Date.now() };
+  };
+  /**
+   * Plain console.log alone isn't enough for anything meant for a human to
+   * actually read: the dashboard clears the screen every DASHBOARD_REFRESH_MS
+   * (default 1s), so a bare console.log flashes and is gone before it can be
+   * read. Routing status/feedback messages through setEvent too keeps them
+   * visible (with an age) across redraws until the next real event replaces
+   * them - use this instead of a bare console.log for anything the user is
+   * meant to see, not just background logging.
+   */
+  const notify = (message: string): void => {
+    console.log(message);
+    setEvent(message);
   };
 
   function recordTrade(trade: RecentTrade): void {
@@ -220,7 +268,7 @@ async function main() {
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
 
-  startCommandLoop({
+  const commandRl = startCommandLoop({
     logger: log,
     mode: config.mode,
     manualBuy: (usdAmount, slot, maxPriceUsd) => {
@@ -230,24 +278,20 @@ async function main() {
       }
       const flip = getFlip(slot);
       if (flip.phase !== "AWAITING_BUY") {
-        console.log(`buy: Slot ${slot} already in a position - sell first.`);
+        notify(`buy: Slot ${slot} already in a position - sell first.`);
         return Promise.resolve();
       }
       pendingManualBuy[slot] = { usdAmount, maxPriceUsd };
-      const msg = `Slot ${slot}: czeka na cenę <= $${maxPriceUsd.toFixed(8)}, wtedy kupi (odwołaj: "cancel ${slot.toLowerCase()}")`;
-      setEvent(msg);
-      console.log(msg);
+      notify(`Slot ${slot}: czeka na cenę <= $${maxPriceUsd.toFixed(8)}, wtedy kupi (odwołaj: "cancel ${slot.toLowerCase()}")`);
       return Promise.resolve();
     },
     cancelManualBuy: (slot) => {
       if (!pendingManualBuy[slot]) {
-        console.log(`cancel: Slot ${slot} nie ma oczekującego zlecenia.`);
+        notify(`cancel: Slot ${slot} nie ma oczekującego zlecenia.`);
         return;
       }
       pendingManualBuy[slot] = null;
-      const msg = `Slot ${slot}: odwołano oczekujące zlecenie kupna.`;
-      setEvent(msg);
-      console.log(msg);
+      notify(`Slot ${slot}: odwołano oczekujące zlecenie kupna.`);
     },
     manualSell: (percent, slot) => executeSell(slot, percent, { requireProfitGate: false, tag: "MANUAL" }),
     panic: (slot) =>
@@ -277,7 +321,13 @@ async function main() {
 
   const dashboardLoop = (async () => {
     while (running) {
-      renderDashboard(buildSnapshot());
+      // Skip the redraw while a command is partway typed - it clears the
+      // WHOLE terminal, so refreshing mid-keystroke wipes out what you were
+      // typing before you can finish/submit it. Resumes as soon as the line
+      // is empty again (submitted or cleared).
+      if (commandRl.line.length === 0) {
+        renderDashboard(buildSnapshot());
+      }
       await sleep(config.dashboardRefreshMs);
     }
   })();
@@ -309,9 +359,23 @@ async function main() {
     await checkPendingManualBuy("B", currentPriceUsd);
     await checkPendingManualBuy("C", currentPriceUsd);
 
-    await evaluateSlotA(currentPriceUsd, solUsd);
-    await evaluateSlotB(currentPriceUsd, solUsd);
-    await evaluateSlotC(currentPriceUsd, solUsd);
+    // Each slot isolated: one slot repeatedly failing (e.g. every automatic
+    // buy attempt rejected on-chain) must never stop the OTHER slots from
+    // being evaluated that tick - previously a thrown error from Slot B
+    // skipped Slot C entirely (and any slot after it) for that whole tick,
+    // silently, for as long as B kept failing.
+    await evaluateSlotSafely("A", () => evaluateSlotA(currentPriceUsd, solUsd));
+    await evaluateSlotSafely("B", () => evaluateSlotB(currentPriceUsd, solUsd));
+    await evaluateSlotSafely("C", () => evaluateSlotC(currentPriceUsd, solUsd));
+  }
+
+  async function evaluateSlotSafely(slotKey: SlotKey, run: () => Promise<void>): Promise<void> {
+    try {
+      await run();
+    } catch (err) {
+      lastErrorMessage = String((err as Error).message ?? err);
+      log.error(`Slot ${slotKey}: tick evaluation failed`, { error: lastErrorMessage });
+    }
   }
 
   async function checkPendingManualBuy(slotKey: SlotKey, currentPriceUsd: number): Promise<void> {
@@ -748,16 +812,31 @@ async function main() {
   ): Promise<void> {
     const flip = getFlip(slotKey);
     if (flip.phase !== "AWAITING_BUY") {
-      if (opts.tag === "MANUAL") console.log(`buy: Slot ${slotKey} already in a position - sell first.`);
+      if (opts.tag === "MANUAL") notify(`buy: Slot ${slotKey} already in a position - sell first.`);
+      return;
+    }
+    if (opts.tag === "AUTO" && isAutoBuyPaused(slotKey)) {
+      if (config.log.logSkips) {
+        const msRemaining = (autoBuyPausedUntilMs[slotKey] ?? Date.now()) - Date.now();
+        log.info(`Slot ${slotKey}: auto-buy paused (${Math.ceil(msRemaining / 1000)}s remaining) - skipping`);
+      }
       return;
     }
     if (slotLocks[slotKey]) {
-      if (opts.tag === "MANUAL") console.log(`buy: Slot ${slotKey} is mid-transaction - try again in a moment.`);
+      if (opts.tag === "MANUAL") notify(`buy: Slot ${slotKey} is mid-transaction - try again in a moment.`);
       return;
     }
     slotLocks[slotKey] = true;
     try {
       await executeBuyLocked(slotKey, flip, usdAmountOverride, opts, maxPriceUsd);
+      // Reached without throwing - whether it actually filled or just
+      // skipped on a normal gate (cost/spread/impact too high right now),
+      // the pipeline itself is working, so clear any past-failure streak.
+      autoBuyFailures[slotKey] = 0;
+      autoBuyPausedUntilMs[slotKey] = null;
+    } catch (err) {
+      if (opts.tag === "AUTO") registerAutoBuyFailure(slotKey, err);
+      throw err;
     } finally {
       slotLocks[slotKey] = false;
     }
@@ -780,7 +859,7 @@ async function main() {
     if (usdAmount <= 0) {
       const msg = `skipping buy (Slot ${slotKey}) - computed trade size is $0 (check SLOT_${slotKey}_SIZE_PERCENT)`;
       log.warn(msg);
-      if (opts.tag === "MANUAL") console.log(msg);
+      if (opts.tag === "MANUAL") notify(msg);
       return;
     }
     const solIn = usdAmount / solUsd;
@@ -789,7 +868,7 @@ async function main() {
     if (solBalance - solIn < config.trade.minSolReserve) {
       const msg = `skipping buy (Slot ${slotKey}) - would breach MIN_SOL_RESERVE (balance ${solBalance.toFixed(4)}, need ${solIn.toFixed(4)})`;
       log.warn(msg);
-      if (opts.tag === "MANUAL") console.log(msg);
+      if (opts.tag === "MANUAL") notify(msg);
       return;
     }
 
@@ -798,7 +877,7 @@ async function main() {
     if (spreadPercent > config.strategy.maxSpreadPercent) {
       const msg = `skipping buy (Slot ${slotKey}) - pool spread too wide (${spreadPercent.toFixed(2)}% > max ${config.strategy.maxSpreadPercent}%)`;
       log.warn(msg);
-      if (opts.tag === "MANUAL") console.log(msg);
+      if (opts.tag === "MANUAL") notify(msg);
       return;
     }
 
@@ -813,7 +892,7 @@ async function main() {
     if (buyImpact > config.execution.maxPriceImpactBps / 100) {
       const msg = `skipping buy (Slot ${slotKey}) - price impact too high (${buyImpact.toFixed(2)}%)`;
       log.warn(msg);
-      if (opts.tag === "MANUAL") console.log(msg);
+      if (opts.tag === "MANUAL") notify(msg);
       return;
     }
 
@@ -830,7 +909,7 @@ async function main() {
       if (projectedFillPriceUsd > maxPriceUsd) {
         const msg = `Slot ${slotKey}: limit buy waiting - projected fill $${projectedFillPriceUsd.toFixed(8)} > limit $${maxPriceUsd.toFixed(8)} (this order's own size has more impact than the reference quote)`;
         if (config.log.logSkips) log.info(msg);
-        if (opts.tag === "MANUAL") console.log(msg);
+        if (opts.tag === "MANUAL") notify(msg);
         return;
       }
     }
@@ -938,7 +1017,7 @@ async function main() {
   ): Promise<void> {
     const flip = getFlip(slotKey);
     if (flip.phase !== "AWAITING_SELL" || flip.buyPrice === null || flip.entryCost === null) {
-      console.log(`sell: Slot ${slotKey} has no position to sell.`);
+      notify(`sell: Slot ${slotKey} has no position to sell.`);
       return;
     }
 
@@ -947,7 +1026,7 @@ async function main() {
     const heldAmount = flip.tokenAmount ?? 0;
     const sellAmount = heldAmount * (percentOfPosition / 100);
     if (sellAmount <= 0) {
-      console.log(`sell: Slot ${slotKey} has no position to sell.`);
+      notify(`sell: Slot ${slotKey} has no position to sell.`);
       return;
     }
 
@@ -971,7 +1050,7 @@ async function main() {
 
     if (opts.requireProfitGate && net < config.strategy.minNetProfitPercent) {
       const msg = `sell: Slot ${slotKey} net profit too thin right now (${net.toFixed(2)}% < required ${config.strategy.minNetProfitPercent}%)`;
-      console.log(msg);
+      notify(msg);
       return;
     }
 
@@ -993,7 +1072,7 @@ async function main() {
     const flip = getFlip(slotKey);
     if (flip.buyPrice === null || flip.entryCost === null) return;
     if (slotLocks[slotKey]) {
-      console.log(`sell: Slot ${slotKey} is mid-transaction - try again in a moment.`);
+      notify(`sell: Slot ${slotKey} is mid-transaction - try again in a moment.`);
       return;
     }
     slotLocks[slotKey] = true;
@@ -1108,7 +1187,7 @@ async function main() {
    */
   async function rebaseInitialPortfolio(): Promise<void> {
     if (latestSolUsd === undefined || latestPriceUsd === undefined) {
-      console.log("rebase: brak jeszcze danych cenowych - poczekaj na pierwszy tick i spróbuj ponownie.");
+      notify("rebase: brak jeszcze danych cenowych - poczekaj na pierwszy tick i spróbuj ponownie.");
       return;
     }
     const solBalance = config.mode === "live" && owner ? await getSolBalanceSol(connection, owner) : s.paperSolBalance;
@@ -1124,9 +1203,9 @@ async function main() {
     const newBase = solBalance * latestSolUsd + investedUsd;
     s.initialPortfolioUsd = newBase;
     saveState(config, s);
-    const msg = `rebase: baza wielkości pozycji $${oldBase.toFixed(2)} -> $${newBase.toFixed(2)} (${usdSigned(newBase - oldBase)}) - SLOT_A/B/C_SIZE_PERCENT liczą się teraz od tej nowej wartości`;
-    setEvent(msg);
-    console.log(msg);
+    notify(
+      `rebase: baza wielkości pozycji $${oldBase.toFixed(2)} -> $${newBase.toFixed(2)} (${usdSigned(newBase - oldBase)}) - SLOT_A/B/C_SIZE_PERCENT liczą się teraz od tej nowej wartości`,
+    );
     log.info("rebased initialPortfolioUsd", { oldBase: round2(oldBase), newBase: round2(newBase) });
   }
 
@@ -1253,6 +1332,9 @@ async function main() {
       reinforcement,
       breakoutBuy,
       pendingManualBuy: pendingManualBuy[slotKey] ?? undefined,
+      autoBuyPausedSecondsLeft: isAutoBuyPaused(slotKey)
+        ? Math.max(0, Math.ceil(((autoBuyPausedUntilMs[slotKey] ?? Date.now()) - Date.now()) / 1000))
+        : undefined,
     };
   }
 

@@ -63,6 +63,8 @@ export interface SlotDashboardState {
   breakoutBuy: BreakoutBuyInfo | undefined;
   /** A manual "buy ... @maxPrice" limit order waiting for the price to drop to it - undefined when none is pending. */
   pendingManualBuy: PendingManualBuyInfo | undefined;
+  /** Seconds left on the auto-buy circuit breaker (see AUTO_BUY_FAILURE_LIMIT) - undefined when not paused. */
+  autoBuyPausedSecondsLeft: number | undefined;
 }
 
 export interface PendingManualBuyInfo {
@@ -236,6 +238,11 @@ function formatSlot(slot: SlotDashboardState, tokenSymbol: string): string[] {
   }
 
   if (!slot.position) {
+    if (slot.autoBuyPausedSecondsLeft !== undefined) {
+      lines.push(
+        `  ${colorize("Auto-kupno WSTRZYMANE", colors.RED)} (${slot.autoBuyPausedSecondsLeft}s) - kilka nieudanych prób z rzędu; ręczne "buy" nadal działa`,
+      );
+    }
     if (slot.pendingManualBuy) {
       const m = slot.pendingManualBuy;
       const amountLabel = m.usdAmount !== undefined ? usd(m.usdAmount, 2) : `${slot.sizePercent}% salda`;
@@ -285,12 +292,21 @@ export function formatAge(ageMs: number): string {
   return `${Math.floor(safeAgeMs / 3_600_000)}h ago`;
 }
 
+let clearedScrollbackOnce = false;
+
 export function renderDashboard(s: DashboardState): void {
   // console.clear() is a no-op on some Windows terminals, which stacks every
-  // refresh under the last one instead of replacing it. This ANSI sequence
-  // clears the visible screen AND scrollback and homes the cursor, which
-  // works everywhere console.clear() does, plus where it doesn't.
-  process.stdout.write("\x1b[2J\x1b[3J\x1b[H");
+  // refresh under the last one instead of replacing it. \x1b[2J\x1b[H clears
+  // just the visible screen and homes the cursor, which works everywhere
+  // console.clear() does, plus where it doesn't - and, critically, does NOT
+  // touch the terminal's scrollback, so scrolling up to read something
+  // earlier still works. \x1b[3J (which also wipes scrollback) runs only
+  // ONCE, on the very first render, to clear stale content from before this
+  // run started - not on every refresh, which previously reset the view to
+  // the top every second and made scrolling back impossible.
+  const clearSequence = clearedScrollbackOnce ? "\x1b[2J\x1b[H" : "\x1b[2J\x1b[3J\x1b[H";
+  clearedScrollbackOnce = true;
+  process.stdout.write(clearSequence);
   console.log(formatDashboard(s));
   console.log(
     "\ncommands: buy [usd] [a|b|c] [@maxPrice]  cancel [a|b|c]  sell [percent] [a|b|c]  panic [a|b|c]  reset  status  quit",
