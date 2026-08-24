@@ -299,20 +299,55 @@ export function formatAge(ageMs: number): string {
   return `${Math.floor(safeAgeMs / 3_600_000)}h ago`;
 }
 
+const ANSI_PATTERN = /\x1b\[[0-9;]*m/g;
+
+/**
+ * Counts the physical terminal rows `text` will occupy at a given
+ * terminal width, not just its `\n` count. A logical line longer than
+ * the terminal is wrapped by the terminal itself, so undercounting rows
+ * here (e.g. the long commands line at 80 columns) would move the
+ * cursor up too little on the next redraw and leave stray leftover
+ * characters from the previous frame - which looks exactly like the
+ * screen scrolling forever, just slower than a full-screen clear bug.
+ */
+function countPhysicalRows(text: string, columns: number): number {
+  return text.split("\n").reduce((total, line) => {
+    const visibleWidth = line.replace(ANSI_PATTERN, "").length;
+    return total + Math.max(1, Math.ceil(visibleWidth / columns));
+  }, 0);
+}
+
 let clearedScrollbackOnce = false;
-let previousRenderLineCount = 0;
+let previousRenderRowCount = 0;
+
+/**
+ * Tells the dashboard that something else (a log line) wrote to stdout
+ * outside of renderDashboard(). The cursor is no longer sitting right
+ * after our own last render - moving up by the old row count would land
+ * in the wrong place and corrupt/erase that other output - so the next
+ * render falls back to printing fresh below it instead of trying to
+ * redraw in place. Call this from anything that console.log's on its own,
+ * e.g. the logger.
+ */
+export function notifyExternalStdoutWrite(): void {
+  previousRenderRowCount = 0;
+}
 
 export function renderDashboard(s: DashboardState): void {
   const body =
     formatDashboard(s) +
     "\n\ncommands: buy [usd] [a|b|c] [@maxPrice]  cancel [a|b|c]  sell [percent] [a|b|c]  panic [a|b|c]  reset  status  quit";
+  // 80 matches conhost's traditional default width and is a safe
+  // (slight over-count, never under-count for anything narrower) guess
+  // when the terminal doesn't report its size at all.
+  const columns = process.stdout.columns || 80;
 
   if (!clearedScrollbackOnce) {
     // \x1b[3J wipes scrollback too - run only ONCE, on the very first
     // render, to clear stale content from before this run started.
     process.stdout.write("\x1b[2J\x1b[3J\x1b[H");
     clearedScrollbackOnce = true;
-  } else if (previousRenderLineCount > 0) {
+  } else if (previousRenderRowCount > 0) {
     // Redraw in place: move the cursor back up over the previous render,
     // then erase from there to the end of the screen. This is preferred
     // over a fresh \x1b[2J\x1b[H every refresh because plain Windows
@@ -322,8 +357,8 @@ export function renderDashboard(s: DashboardState): void {
     // full screen of blank lines into the buffer and the dashboard
     // appeared to scroll forever. Moving up + erasing-to-end overwrites
     // the previous render's lines directly and works the same everywhere.
-    process.stdout.write(`\x1b[${previousRenderLineCount}A\x1b[0J`);
+    process.stdout.write(`\x1b[${previousRenderRowCount}A\x1b[0J`);
   }
   console.log(body);
-  previousRenderLineCount = body.split("\n").length;
+  previousRenderRowCount = countPhysicalRows(body, columns);
 }
