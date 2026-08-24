@@ -45,6 +45,28 @@ function Get-DashboardUrl {
     return "http://127.0.0.1:$port"
 }
 
+# Start-Process with a bare URL asks Windows to look up the registered
+# handler for "http" - on some machines that association is broken or
+# points somewhere unexpected (seen here opening Notepad instead of a
+# browser). Launching a known browser executable directly with the URL
+# as its argument sidesteps that lookup entirely.
+function Open-DashboardUrl {
+    param([string]$Url)
+    $browserPaths = @(
+        "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe",
+        "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe",
+        "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
+        "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe",
+        "$env:ProgramFiles\Mozilla Firefox\firefox.exe"
+    )
+    $browser = $browserPaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if ($browser) {
+        Start-Process -FilePath $browser -ArgumentList $Url
+    } else {
+        Write-Host "Nie znalazlem Edge/Chrome/Firefox w standardowej lokalizacji - otworz recznie: $Url"
+    }
+}
+
 $dashboardUrls = @()
 
 Write-Host "Startuje Slot A (.env)..."
@@ -73,7 +95,7 @@ if ($dashboardUrls.Count -gt 0) {
     Start-Sleep -Seconds 6
     foreach ($url in $dashboardUrls) {
         Write-Host "Otwieram $url"
-        Start-Process $url
+        Open-DashboardUrl -Url $url
     }
 } else {
     Write-Host "Zaden .env nie ma DASHBOARD_WEB_ENABLED=true - pomijam otwieranie przegladarki."
