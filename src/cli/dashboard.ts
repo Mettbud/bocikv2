@@ -107,6 +107,11 @@ export interface DashboardState {
   solBalance: number;
   /** Current SOL holdings marked at the latest SOL/USD quote. */
   solValueUsd: number | undefined;
+  /** SOL deliberately unavailable to strategies so transaction fees remain funded. */
+  minSolReserve: number;
+  /** What strategies may actually spend after preserving minSolReserve. */
+  availableSolForBuys: number;
+  availableUsdForBuys: number | undefined;
   /** Fixed sizing baseline captured on first run or explicitly changed by rebase. */
   initialPortfolioUsd: number;
   tokenBalance: number;
@@ -146,6 +151,10 @@ export function formatDashboard(s: DashboardState): string {
 
   lines.push("");
   lines.push(`W SOL teraz:       ${s.solBalance.toFixed(6)} SOL${s.solValueUsd !== undefined ? ` (${usd(s.solValueUsd, 2)})` : ""}`);
+  lines.push(`Rezerwa SOL:       ${s.minSolReserve.toFixed(6)} SOL`);
+  lines.push(
+    `Dostępne na kupna: ${s.availableSolForBuys.toFixed(6)} SOL${s.availableUsdForBuys !== undefined ? ` (${usd(s.availableUsdForBuys, 2)})` : ""}`,
+  );
   lines.push(`Kapitał początkowy: ${usd(s.initialPortfolioUsd, 2)}`);
   lines.push(`${s.tokenSymbol} balance: ${s.tokenBalance.toLocaleString("en-US")}`);
   if (s.paperUsdBalance !== undefined) {
@@ -209,7 +218,7 @@ function formatSlot(slot: SlotDashboardState, tokenSymbol: string): string[] {
       if (t.armed && t.triggerPriceUsd !== undefined) {
         const triggerGainPercent = ((t.triggerPriceUsd / p.buyPriceUsd) - 1) * 100;
         lines.push(
-          `  Trailing stop: ${colorize("UZBROJONY", colors.GREEN)}, szczyt ${usd(t.peakPriceUsd, 8)} (${pct(peakGainPercent)} od wejścia), sprzeda poniżej ${usd(t.triggerPriceUsd, 8)} (${pct(triggerGainPercent)} od wejścia)`,
+          `  Trailing stop: ${colorize("UZBROJONY", colors.GREEN)}, szczyt ${usd(t.peakPriceUsd, 8)} (${pct(peakGainPercent)} od wejścia), próg cofnięcia ${usd(t.triggerPriceUsd, 8)} (${pct(triggerGainPercent)} od wejścia); sprzeda tylko przy netto >= +${slot.minNetProfitPercent.toFixed(2)}%`,
         );
       } else {
         lines.push(

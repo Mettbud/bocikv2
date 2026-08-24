@@ -1432,6 +1432,10 @@ async function main() {
       realizedPnlUsd: s.realizedPnlUsd,
       solBalance: latestSolBalance,
       solValueUsd: latestSolUsd !== undefined ? latestSolBalance * latestSolUsd : undefined,
+      minSolReserve: config.trade.minSolReserve,
+      availableSolForBuys: Math.max(0, latestSolBalance - config.trade.minSolReserve),
+      availableUsdForBuys:
+        latestSolUsd !== undefined ? Math.max(0, latestSolBalance - config.trade.minSolReserve) * latestSolUsd : undefined,
       initialPortfolioUsd: s.initialPortfolioUsd,
       tokenBalance: latestTokenBalance,
       // How much is actually deployed in the market right now (both slots'

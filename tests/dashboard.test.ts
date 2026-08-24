@@ -41,6 +41,9 @@ const base: DashboardState = {
   realizedPnlUsd: 0,
   solBalance: 0.05,
   solValueUsd: 5,
+  minSolReserve: 0.02,
+  availableSolForBuys: 0.03,
+  availableUsdForBuys: 3,
   initialPortfolioUsd: 1000,
   tokenBalance: 0,
   investedUsd: 0,
@@ -64,6 +67,8 @@ describe("formatDashboard", () => {
     expect(out).toContain("Mode: ");
     expect(out).toContain("PAPER");
     expect(out).toContain("0.050000 SOL ($5.00)");
+    expect(out).toContain("Rezerwa SOL:       0.020000 SOL");
+    expect(out).toContain("Dostępne na kupna: 0.030000 SOL ($3.00)");
     expect(out).toContain("Kapitał początkowy: $1000.00");
   });
 
@@ -253,6 +258,7 @@ describe("formatDashboard", () => {
     expect(out).toContain("$0.02577000");
     expect(out).toContain("+5.20% od wejścia");
     expect(out).toContain("+3.08% od wejścia");
+    expect(out).toContain("sprzeda tylko przy netto >= +2.00%");
   });
 
   it("shows an unarmed trailing stop", () => {

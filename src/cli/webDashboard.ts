@@ -279,7 +279,7 @@ function renderSlotBody(slot, tokenSymbol) {
       const t = p.trailingStop;
       const peakGainPercent = ((t.peakPriceUsd / p.buyPriceUsd) - 1) * 100;
       html += t.armed && t.triggerPriceUsd !== undefined
-        ? row("Trailing stop", '<span class="pos">UZBROJONY</span>, szczyt ' + usd(t.peakPriceUsd, 8) + " (" + pct(peakGainPercent) + " od wejścia), sprzeda poniżej " + usd(t.triggerPriceUsd, 8) + " (" + pct(((t.triggerPriceUsd / p.buyPriceUsd) - 1) * 100) + " od wejścia)")
+        ? row("Trailing stop", '<span class="pos">UZBROJONY</span>, szczyt ' + usd(t.peakPriceUsd, 8) + " (" + pct(peakGainPercent) + " od wejścia), próg cofnięcia " + usd(t.triggerPriceUsd, 8) + " (" + pct(((t.triggerPriceUsd / p.buyPriceUsd) - 1) * 100) + " od wejścia); sprzeda tylko przy netto &ge; +" + slot.minNetProfitPercent.toFixed(2) + "%")
         : row("Trailing stop", '<span class="muted">nieuzbrojony</span> (szczyt ' + usd(t.peakPriceUsd, 8) + ", " + pct(peakGainPercent) + " od wejścia)");
     }
   } else if (slot.requireManualNextBuy) {
@@ -362,6 +362,8 @@ function renderInstanceBody(instanceKey, s) {
   html += row("Realized PnL", '<span class="' + signClass(s.realizedPnlUsd) + '">' + usd(s.realizedPnlUsd, 2) + "</span>");
   html += row("W rynku teraz", usd(s.investedUsd, 2) + (s.investedPercentOfEquity !== undefined ? " (" + s.investedPercentOfEquity.toFixed(1) + "% portfela)" : ""));
   html += row("W SOL teraz", s.solBalance.toFixed(6) + " SOL" + (s.solValueUsd !== undefined ? " (" + usd(s.solValueUsd, 2) + ")" : ""));
+  html += row("Rezerwa SOL", s.minSolReserve.toFixed(6) + " SOL");
+  html += row("Dostępne na kupna", s.availableSolForBuys.toFixed(6) + " SOL" + (s.availableUsdForBuys !== undefined ? " (" + usd(s.availableUsdForBuys, 2) + ")" : ""));
   html += row("Kapitał początkowy", usd(s.initialPortfolioUsd, 2));
   html += row(esc(s.tokenSymbol) + " balance", s.tokenBalance.toLocaleString("en-US"));
   if (s.paperUsdBalance !== undefined) html += row("Paper equity", usd(s.paperUsdBalance, 2));

@@ -29,6 +29,7 @@ describe("ready environment profiles", () => {
       expect(config.files.state).toBe(profile.state);
       expect(config.strategy.slotCEnabled).toBe(profile.slotCEnabled);
       expect(config.trade.slotCSizePercent).toBe(30);
+      expect(config.trade.minSolReserve).toBe(0.01);
       expect(config.strategy.breakoutBuyEnabled).toBe(true);
       expect(config.strategy.slotCTriggerMinPercent).toBe(10);
       expect(config.strategy.slotCTriggerMaxPercent).toBe(22);
