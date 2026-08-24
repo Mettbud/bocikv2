@@ -30,7 +30,7 @@ import { executeLeg, priceLeg } from "./trader.js";
 import { computeFixedSlotTradeUsd } from "./sizing.js";
 import { computeAdaptiveTargetPercent, trimOldSamples, windowStats, type PriceSample } from "./volatility.js";
 import { renderDashboard, type DashboardState, type SlotDashboardState } from "./cli/dashboard.js";
-import { startCommandLoop, type SlotKey } from "./cli/commands.js";
+import { startCommandLoop, type CommandDeps, type SlotKey } from "./cli/commands.js";
 import { startWebDashboard } from "./cli/webDashboard.js";
 
 /** Per-slot numbers shown on the dashboard that only make sense "as of the last check". */
@@ -297,7 +297,7 @@ async function main() {
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
 
-  const commandRl = startCommandLoop({
+  const commandDeps: CommandDeps = {
     logger: log,
     mode: config.mode,
     manualBuy: (usdAmount, slot, maxPriceUsd) => {
@@ -334,10 +334,11 @@ async function main() {
     reset: resetPaperSession,
     rebase: rebaseInitialPortfolio,
     onExit: stop,
-  });
+  };
+  const commandRl = startCommandLoop(commandDeps);
 
   if (config.dashboardWeb.enabled) {
-    webDashboard = startWebDashboard(buildSnapshot, config.dashboardWeb.port, log);
+    webDashboard = startWebDashboard(buildSnapshot, commandDeps, config.dashboardWeb.port, log);
   }
 
   let tickFailureCount = 0;

@@ -1,6 +1,7 @@
 import type { AddressInfo } from "node:net";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDashboardHttpServer } from "../src/cli/webDashboard.js";
+import type { CommandDeps } from "../src/cli/commands.js";
 import type { DashboardState, SlotDashboardState } from "../src/cli/dashboard.js";
 
 const flatSlot: SlotDashboardState = {
@@ -47,6 +48,21 @@ const state: DashboardState = {
   lastErrorMessage: undefined,
 };
 
+function fakeDeps(overrides: Partial<CommandDeps> = {}): CommandDeps {
+  return {
+    logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    mode: "paper",
+    manualBuy: vi.fn().mockResolvedValue(undefined),
+    manualSell: vi.fn().mockResolvedValue(undefined),
+    panic: vi.fn().mockResolvedValue(undefined),
+    cancelManualBuy: vi.fn(),
+    reset: vi.fn(),
+    rebase: vi.fn().mockResolvedValue(undefined),
+    onExit: vi.fn(),
+    ...overrides,
+  };
+}
+
 async function listenOnEphemeralPort(server: ReturnType<typeof createDashboardHttpServer>): Promise<number> {
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   return (server.address() as AddressInfo).port;
@@ -61,7 +77,7 @@ describe("createDashboardHttpServer", () => {
   });
 
   it("serves the current snapshot as JSON on /api/state", async () => {
-    server = createDashboardHttpServer(() => state);
+    server = createDashboardHttpServer(() => state, fakeDeps());
     const port = await listenOnEphemeralPort(server);
 
     const res = await fetch(`http://127.0.0.1:${port}/api/state`);
@@ -74,7 +90,7 @@ describe("createDashboardHttpServer", () => {
 
   it("calls getSnapshot fresh on every request, not just once at startup", async () => {
     let price = 0.02;
-    server = createDashboardHttpServer(() => ({ ...state, priceUsd: price }));
+    server = createDashboardHttpServer(() => ({ ...state, priceUsd: price }), fakeDeps());
     const port = await listenOnEphemeralPort(server);
 
     const first = (await (await fetch(`http://127.0.0.1:${port}/api/state`)).json()) as DashboardState;
@@ -86,7 +102,7 @@ describe("createDashboardHttpServer", () => {
   });
 
   it("serves an HTML page on /", async () => {
-    server = createDashboardHttpServer(() => state);
+    server = createDashboardHttpServer(() => state, fakeDeps());
     const port = await listenOnEphemeralPort(server);
 
     const res = await fetch(`http://127.0.0.1:${port}/`);
@@ -97,10 +113,58 @@ describe("createDashboardHttpServer", () => {
   });
 
   it("404s on an unknown path", async () => {
-    server = createDashboardHttpServer(() => state);
+    server = createDashboardHttpServer(() => state, fakeDeps());
     const port = await listenOnEphemeralPort(server);
 
     const res = await fetch(`http://127.0.0.1:${port}/nope`);
     expect(res.status).toBe(404);
+  });
+
+  it("POST /api/command routes the line through the same handleLine() path as the terminal", async () => {
+    const deps = fakeDeps();
+    server = createDashboardHttpServer(() => state, deps);
+    const port = await listenOnEphemeralPort(server);
+
+    const res = await fetch(`http://127.0.0.1:${port}/api/command`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ line: "buy a" }),
+    });
+
+    expect(res.status).toBe(200);
+    expect((await res.json()) as { ok: boolean }).toEqual({ ok: true });
+    expect(deps.manualBuy).toHaveBeenCalledWith(undefined, "A", undefined);
+  });
+
+  it("POST /api/command rejects a missing line with 400, without calling any command", async () => {
+    const deps = fakeDeps();
+    server = createDashboardHttpServer(() => state, deps);
+    const port = await listenOnEphemeralPort(server);
+
+    const res = await fetch(`http://127.0.0.1:${port}/api/command`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+
+    expect(res.status).toBe(400);
+    expect(deps.manualBuy).not.toHaveBeenCalled();
+  });
+
+  it("POST /api/command surfaces a thrown error as a 500 instead of crashing the server", async () => {
+    const deps = fakeDeps({ panic: vi.fn().mockRejectedValue(new Error("simulation failed")) });
+    server = createDashboardHttpServer(() => state, deps);
+    const port = await listenOnEphemeralPort(server);
+
+    const res = await fetch(`http://127.0.0.1:${port}/api/command`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ line: "panic a" }),
+    });
+
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { ok: boolean; error: string };
+    expect(body.ok).toBe(false);
+    expect(body.error).toContain("simulation failed");
   });
 });
