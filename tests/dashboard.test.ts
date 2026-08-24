@@ -7,6 +7,7 @@ const flatSlotA: SlotDashboardState = {
   position: undefined,
   rebuyTriggerUsd: undefined,
   lastSellPriceUsd: undefined,
+  requireManualNextBuy: false,
   completedFlips: 0,
   adaptiveTargetEnabled: false,
   nextTargetGainPercent: undefined,
@@ -78,6 +79,15 @@ describe("formatDashboard", () => {
       slotA: { ...flatSlotA, rebuyTriggerUsd: 0.025, lastSellPriceUsd: 0.026 },
     });
     expect(out).toContain("Odkup poniżej:");
+  });
+
+  it("shows a waiting-for-manual-buy indicator instead of the rebuy trigger after a manual/panic sell", () => {
+    const out = formatDashboard({
+      ...base,
+      slotA: { ...flatSlotA, rebuyTriggerUsd: 0.025, lastSellPriceUsd: 0.026, requireManualNextBuy: true },
+    });
+    expect(out).toContain("Czeka na ręczne");
+    expect(out).not.toContain("Odkup poniżej:");
   });
 
   it("shows a pending manual buy limit order (explicit USD amount) while flat", () => {

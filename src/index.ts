@@ -1330,6 +1330,7 @@ async function main() {
           ? flip.lastSellPrice * (1 - config.strategy.rebuyDropPercent / 100)
           : undefined,
       lastSellPriceUsd: flip.lastSellPrice ?? undefined,
+      requireManualNextBuy: flip.requireManualNextBuy,
       completedFlips: flip.completedFlips,
       adaptiveTargetEnabled: config.strategy.adaptiveTargetEnabled,
       nextTargetGainPercent: flip.phase === "AWAITING_BUY" ? computeCurrentTargetGainPercent() : undefined,

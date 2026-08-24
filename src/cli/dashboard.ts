@@ -47,6 +47,8 @@ export interface SlotDashboardState {
   /** Slot A only: rebuy trigger below its own last sell. Slots B/C never rebuy on their own. */
   rebuyTriggerUsd: number | undefined;
   lastSellPriceUsd: number | undefined;
+  /** true if the last sell on this slot was a manual "sell" or "panic" - blocks every automatic buy path until a manual "buy". */
+  requireManualNextBuy: boolean;
   completedFlips: number;
   adaptiveTargetEnabled: boolean;
   nextTargetGainPercent: number | undefined;
@@ -204,6 +206,11 @@ function formatSlot(slot: SlotDashboardState, tokenSymbol: string): string[] {
         lines.push(`  Trailing stop: ${colorize("nieuzbrojony", colors.DIM)} (szczyt ${usd(t.peakPriceUsd, 8)}, jeszcze za mało zysku)`);
       }
     }
+  } else if (slot.requireManualNextBuy) {
+    lines.push("  Pozycja: brak - czeka na sygnał kupna");
+    lines.push(
+      `  ${colorize("Czeka na ręczne \"buy\"", colors.YELLOW)} (ostatnia sprzedaż była ręczna/panic - auto-kupno nie wznowi się samo)`,
+    );
   } else if (slot.reinforcement) {
     const r = slot.reinforcement;
     const disabledFlag = slot.label === "B" ? "DUAL_SLOT_ENABLED=false" : "SLOT_C_ENABLED=false";
