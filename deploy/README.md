@@ -43,6 +43,25 @@ Następnie otwórz `http://127.0.0.1:4273`. Strona pokazuje stan i ostatnie
 transakcje wszystkich instancji, ale serwer na tych portach nie przyjmuje
 `POST /api/command`.
 
+### Telefon bez tunelu SSH
+
+`bocikv2-readonly-tunnel.service` może wystawić wyłącznie port 4273 przez
+Cloudflare Quick Tunnel. Mobilny widok jest pod ścieżką `/live`, wymaga
+Basic Auth i pokazuje tylko instancję LIVE A. Panel kontrolny 4173 nigdy nie
+jest przekazywany do Cloudflare.
+
+Quick Tunnel nie wymaga konta ani domeny, ale jego losowy adres
+`*.trycloudflare.com` może zmienić się po restarcie procesu i Cloudflare nie
+gwarantuje dla niego SLA. Stały adres wymaga nazwanego tunelu oraz domeny na
+koncie Cloudflare.
+
+Aktualny adres można odczytać bez wyświetlania konfiguracji bota:
+
+```bash
+journalctl -u bocikv2-readonly-tunnel -n 50 --no-pager \
+  | grep -o 'https://[^ ]*\.trycloudflare\.com' | tail -n 1
+```
+
 ## Obsługa
 
 ```bash

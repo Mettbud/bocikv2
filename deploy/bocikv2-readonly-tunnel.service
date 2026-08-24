@@ -1,0 +1,19 @@
+[Unit]
+Description=Cloudflare Quick Tunnel for bocikv2 read-only dashboard
+After=network-online.target bocikv2@a.service
+Wants=network-online.target
+Requires=bocikv2@a.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/cloudflared tunnel --no-autoupdate --url http://127.0.0.1:4273
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+MemoryMax=100M
+
+[Install]
+WantedBy=multi-user.target
