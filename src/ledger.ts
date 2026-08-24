@@ -20,6 +20,15 @@ export interface PersistedState {
    * as PnL accumulates. Captured once and then carried forward untouched.
    */
   initialPortfolioUsd: number;
+  /**
+   * Which mode this state was saved under. STATE_FILE is a plain path -
+   * switching TRADING_MODE without also changing it points the bot at the
+   * same file it used in the other mode, and paper's fake positions/PnL
+   * would otherwise silently show up as if they were real (or vice versa).
+   * loadState refuses to reuse a state file saved under a different mode -
+   * see below.
+   */
+  mode: "paper" | "live";
 }
 
 /** Older single-slot state files only had `flip`, not `slotA`/`slotB`/`initialPortfolioUsd`. */
@@ -33,8 +42,31 @@ export function loadState(
   defaultInitialPortfolioUsd: number,
 ): PersistedState {
   const path = config.files.state;
+  const fresh = (): PersistedState => ({
+    slotA: initialFlipState(),
+    slotB: initialFlipState(),
+    slotC: initialFlipState(),
+    paperSolBalance: defaultSolBalance,
+    paperTokenBalance: 0,
+    realizedPnlUsd: 0,
+    initialPortfolioUsd: defaultInitialPortfolioUsd,
+    mode: config.mode,
+  });
+
   if (existsSync(path)) {
     const raw = JSON.parse(readFileSync(path, "utf8")) as Partial<PersistedState> & LegacySingleSlotState;
+    // A state file with no `mode` at all predates this check (old file,
+    // always paper back then) - only refuse when it explicitly disagrees
+    // with the mode we're starting in now.
+    if (raw.mode !== undefined && raw.mode !== config.mode) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `WARNING: ${path} was last saved in "${raw.mode}" mode, but this run is "${config.mode}" - ` +
+          "ignoring its positions/PnL and starting fresh instead of mixing paper and live numbers. " +
+          "Use a separate STATE_FILE per mode (e.g. state-live.json) to avoid this warning entirely.",
+      );
+      return fresh();
+    }
     return {
       // Migrate a pre-dual-slot state file: its one position becomes Slot A.
       slotA: raw.slotA ?? raw.flip ?? initialFlipState(),
@@ -44,17 +76,10 @@ export function loadState(
       paperTokenBalance: raw.paperTokenBalance ?? 0,
       realizedPnlUsd: raw.realizedPnlUsd ?? 0,
       initialPortfolioUsd: raw.initialPortfolioUsd ?? defaultInitialPortfolioUsd,
+      mode: config.mode,
     };
   }
-  return {
-    slotA: initialFlipState(),
-    slotB: initialFlipState(),
-    slotC: initialFlipState(),
-    paperSolBalance: defaultSolBalance,
-    paperTokenBalance: 0,
-    realizedPnlUsd: 0,
-    initialPortfolioUsd: defaultInitialPortfolioUsd,
-  };
+  return fresh();
 }
 
 export function saveState(config: BotConfig, state: PersistedState): void {

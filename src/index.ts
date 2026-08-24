@@ -972,6 +972,7 @@ async function main() {
           paperTokenBalance: 0,
           realizedPnlUsd: 0,
           initialPortfolioUsd: config.paper.startingBalanceUsd,
+          mode: config.mode,
         };
         live.A = freshSlotLive();
         live.B = freshSlotLive();
