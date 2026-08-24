@@ -40,6 +40,8 @@ const base: DashboardState = {
   slotC: undefined,
   realizedPnlUsd: 0,
   solBalance: 0.05,
+  solValueUsd: 5,
+  initialPortfolioUsd: 1000,
   tokenBalance: 0,
   investedUsd: 0,
   investedPercentOfEquity: undefined,
@@ -61,6 +63,8 @@ describe("formatDashboard", () => {
     expect(out).toContain("$0.02521136");
     expect(out).toContain("Mode: ");
     expect(out).toContain("PAPER");
+    expect(out).toContain("0.050000 SOL ($5.00)");
+    expect(out).toContain("Kapitał początkowy: $1000.00");
   });
 
   it("shows no warning when AUTO_BUY_ENABLED is true (default)", () => {
@@ -247,6 +251,8 @@ describe("formatDashboard", () => {
     });
     expect(out).toContain("UZBROJONY");
     expect(out).toContain("$0.02577000");
+    expect(out).toContain("+5.20% od wejścia");
+    expect(out).toContain("+3.08% od wejścia");
   });
 
   it("shows an unarmed trailing stop", () => {
@@ -271,6 +277,7 @@ describe("formatDashboard", () => {
       },
     });
     expect(out).toContain("nieuzbrojony");
+    expect(out).toContain("+0.80% od wejścia");
   });
 
   it("lists recent trades, newest first", () => {

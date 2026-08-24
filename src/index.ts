@@ -1431,6 +1431,8 @@ async function main() {
       slotC,
       realizedPnlUsd: s.realizedPnlUsd,
       solBalance: latestSolBalance,
+      solValueUsd: latestSolUsd !== undefined ? latestSolBalance * latestSolUsd : undefined,
+      initialPortfolioUsd: s.initialPortfolioUsd,
       tokenBalance: latestTokenBalance,
       // How much is actually deployed in the market right now (both slots'
       // open positions, marked at the current price) vs. sitting idle as SOL.

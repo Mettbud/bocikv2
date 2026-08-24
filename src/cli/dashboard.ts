@@ -105,6 +105,10 @@ export interface DashboardState {
   /** Combined across all open slots. */
   realizedPnlUsd: number;
   solBalance: number;
+  /** Current SOL holdings marked at the latest SOL/USD quote. */
+  solValueUsd: number | undefined;
+  /** Fixed sizing baseline captured on first run or explicitly changed by rebase. */
+  initialPortfolioUsd: number;
   tokenBalance: number;
   /** Combined market value of both slots' open positions, at the current price. */
   investedUsd: number;
@@ -141,7 +145,8 @@ export function formatDashboard(s: DashboardState): string {
   lines.push(`W rynku teraz:            ${usd(s.investedUsd, 2)}${investedPctLabel}`);
 
   lines.push("");
-  lines.push(`SOL balance:       ${s.solBalance.toFixed(6)}`);
+  lines.push(`W SOL teraz:       ${s.solBalance.toFixed(6)} SOL${s.solValueUsd !== undefined ? ` (${usd(s.solValueUsd, 2)})` : ""}`);
+  lines.push(`Kapitał początkowy: ${usd(s.initialPortfolioUsd, 2)}`);
   lines.push(`${s.tokenSymbol} balance: ${s.tokenBalance.toLocaleString("en-US")}`);
   if (s.paperUsdBalance !== undefined) {
     lines.push(`Paper equity (SOL + pozycje): ${usd(s.paperUsdBalance, 2)}`);
@@ -200,10 +205,16 @@ function formatSlot(slot: SlotDashboardState, tokenSymbol: string): string[] {
     }
     if (p.trailingStop) {
       const t = p.trailingStop;
+      const peakGainPercent = ((t.peakPriceUsd / p.buyPriceUsd) - 1) * 100;
       if (t.armed && t.triggerPriceUsd !== undefined) {
-        lines.push(`  Trailing stop: ${colorize("UZBROJONY", colors.GREEN)}, szczyt ${usd(t.peakPriceUsd, 8)}, sprzeda poniżej ${usd(t.triggerPriceUsd, 8)}`);
+        const triggerGainPercent = ((t.triggerPriceUsd / p.buyPriceUsd) - 1) * 100;
+        lines.push(
+          `  Trailing stop: ${colorize("UZBROJONY", colors.GREEN)}, szczyt ${usd(t.peakPriceUsd, 8)} (${pct(peakGainPercent)} od wejścia), sprzeda poniżej ${usd(t.triggerPriceUsd, 8)} (${pct(triggerGainPercent)} od wejścia)`,
+        );
       } else {
-        lines.push(`  Trailing stop: ${colorize("nieuzbrojony", colors.DIM)} (szczyt ${usd(t.peakPriceUsd, 8)}, jeszcze za mało zysku)`);
+        lines.push(
+          `  Trailing stop: ${colorize("nieuzbrojony", colors.DIM)} (szczyt ${usd(t.peakPriceUsd, 8)}, ${pct(peakGainPercent)} od wejścia, jeszcze za mało zysku)`,
+        );
       }
     }
   } else if (slot.requireManualNextBuy) {

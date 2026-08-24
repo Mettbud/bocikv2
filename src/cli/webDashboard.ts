@@ -142,6 +142,11 @@ const PAGE_HTML = `<!doctype html>
   }
   .instance-head:hover { background: rgba(255,255,255,0.02); }
   .instance-title { display: flex; align-items: center; gap: 10px; font-size: 15px; font-weight: 700; }
+  #renameSelfBtn {
+    padding: 1px 6px; border: 0; background: transparent; color: var(--muted);
+    font-size: 13px; line-height: 1; opacity: 0.7;
+  }
+  #renameSelfBtn:hover { color: var(--accent); opacity: 1; }
   .instance-price { font-variant-numeric: tabular-nums; color: var(--accent); font-weight: 600; }
   .chevron { color: var(--muted); font-size: 11px; transition: transform 0.15s; }
   .instance.collapsed .chevron { transform: rotate(-90deg); }
@@ -197,7 +202,9 @@ const PAGE_HTML = `<!doctype html>
 
   <div class="instance" data-instance="self">
     <div class="instance-head" data-action="toggleInstance" data-instance="self">
-      <span class="instance-title"><span class="dot" data-role="dot"></span> Ta instancja <span class="instance-price" data-role="price"></span></span>
+      <span class="instance-title"><span class="dot" data-role="dot"></span> <span id="selfLabel">Ta instancja</span>
+        <button type="button" id="renameSelfBtn" title="Zmień nazwę" data-action="renameSelf">&#9998;</button>
+        <span class="instance-price" data-role="price"></span></span>
       <span class="chevron">&#9660;</span>
     </div>
     <div class="instance-body" data-role="body"><p class="placeholder">Ładowanie...</p></div>
@@ -243,7 +250,11 @@ function row(label, valueHtml) {
 
 const slotCollapsed = JSON.parse(localStorage.getItem("bocik.slotCollapsed") || "{}");
 const instanceCollapsed = JSON.parse(localStorage.getItem("bocik.instanceCollapsed") || "{}");
-const peerPorts = JSON.parse(localStorage.getItem("bocik.peerPorts") || "{}"); // { b: 4174, c: 4175 }
+const savedPeerPorts = JSON.parse(localStorage.getItem("bocik.peerPorts") || "{}");
+// The page on 4173 is the single control panel. Connect its two peer panels
+// automatically, while still allowing manually saved ports to override the
+// defaults for an unusual local setup.
+const peerPorts = { b: 4174, c: 4175, ...savedPeerPorts };
 
 function renderSlotBody(slot, tokenSymbol) {
   let html = "";
@@ -266,9 +277,10 @@ function renderSlotBody(slot, tokenSymbol) {
     }
     if (p.trailingStop) {
       const t = p.trailingStop;
+      const peakGainPercent = ((t.peakPriceUsd / p.buyPriceUsd) - 1) * 100;
       html += t.armed && t.triggerPriceUsd !== undefined
-        ? row("Trailing stop", '<span class="pos">UZBROJONY</span>, szczyt ' + usd(t.peakPriceUsd, 8) + ", sprzeda poniżej " + usd(t.triggerPriceUsd, 8))
-        : row("Trailing stop", '<span class="muted">nieuzbrojony</span> (szczyt ' + usd(t.peakPriceUsd, 8) + ")");
+        ? row("Trailing stop", '<span class="pos">UZBROJONY</span>, szczyt ' + usd(t.peakPriceUsd, 8) + " (" + pct(peakGainPercent) + " od wejścia), sprzeda poniżej " + usd(t.triggerPriceUsd, 8) + " (" + pct(((t.triggerPriceUsd / p.buyPriceUsd) - 1) * 100) + " od wejścia)")
+        : row("Trailing stop", '<span class="muted">nieuzbrojony</span> (szczyt ' + usd(t.peakPriceUsd, 8) + ", " + pct(peakGainPercent) + " od wejścia)");
     }
   } else if (slot.requireManualNextBuy) {
     html += row("Pozycja", '<span class="muted">brak - czeka na sygnał kupna</span>');
@@ -349,7 +361,8 @@ function renderInstanceBody(instanceKey, s) {
   html += '<div class="summary">';
   html += row("Realized PnL", '<span class="' + signClass(s.realizedPnlUsd) + '">' + usd(s.realizedPnlUsd, 2) + "</span>");
   html += row("W rynku teraz", usd(s.investedUsd, 2) + (s.investedPercentOfEquity !== undefined ? " (" + s.investedPercentOfEquity.toFixed(1) + "% portfela)" : ""));
-  html += row("SOL balance", s.solBalance.toFixed(6));
+  html += row("W SOL teraz", s.solBalance.toFixed(6) + " SOL" + (s.solValueUsd !== undefined ? " (" + usd(s.solValueUsd, 2) + ")" : ""));
+  html += row("Kapitał początkowy", usd(s.initialPortfolioUsd, 2));
   html += row(esc(s.tokenSymbol) + " balance", s.tokenBalance.toLocaleString("en-US"));
   if (s.paperUsdBalance !== undefined) html += row("Paper equity", usd(s.paperUsdBalance, 2));
   html += row("Spread puli", (s.spreadPercent !== undefined ? s.spreadPercent.toFixed(2) + "%" : "-") + " (max " + s.maxSpreadPercent + "%)");
@@ -473,6 +486,16 @@ document.addEventListener("click", (e) => {
     setInstanceCollapsed(key, !panelEl(key).classList.contains("collapsed"));
     return;
   }
+  if (action === "renameSelf") {
+    const currentName = localStorage.getItem(selfNameStorageKey) || "";
+    const enteredName = prompt("Nazwa tej instancji (pusta = nazwa domyślna):", currentName);
+    if (enteredName === null) return;
+    const nextName = enteredName.trim().slice(0, 40);
+    if (nextName) localStorage.setItem(selfNameStorageKey, nextName);
+    else localStorage.removeItem(selfNameStorageKey);
+    applySelfName();
+    return;
+  }
   if (action === "toggleSlot") {
     const ckey = key + ":" + slot;
     slotCollapsed[ckey] = !slotCollapsed[ckey];
@@ -500,6 +523,18 @@ document.addEventListener("click", (e) => {
 if (instanceCollapsed.self) setInstanceCollapsed("self", true);
 if (instanceCollapsed.b) setInstanceCollapsed("b", true);
 if (instanceCollapsed.c) setInstanceCollapsed("c", true);
+
+// A custom label is local to this browser and this exact port, so three
+// concurrently-running instances can be named independently (for example
+// LIVE, PAPER B and PAPER C) without changing bot configuration.
+const selfNameStorageKey = "bocik.selfName." + location.port;
+function applySelfName() {
+  const customName = (localStorage.getItem(selfNameStorageKey) || "").trim();
+  const displayName = customName || "Ta instancja";
+  document.title = (customName ? customName + " - " : "") + "bocik :" + location.port;
+  document.getElementById("selfLabel").textContent = displayName + " (port " + location.port + ")";
+}
+applySelfName();
 
 tick("self");
 initPeer("b");

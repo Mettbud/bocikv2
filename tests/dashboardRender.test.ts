@@ -35,6 +35,8 @@ function makeState(priceUsd: number): DashboardState {
     slotC: undefined,
     realizedPnlUsd: 0,
     solBalance: 0.05,
+    solValueUsd: 5,
+    initialPortfolioUsd: 1000,
     tokenBalance: 0,
     investedUsd: 0,
     investedPercentOfEquity: undefined,

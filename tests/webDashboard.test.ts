@@ -37,6 +37,8 @@ const state: DashboardState = {
   slotC: undefined,
   realizedPnlUsd: 1.23,
   solBalance: 0.05,
+  solValueUsd: 5,
+  initialPortfolioUsd: 1000,
   tokenBalance: 0,
   investedUsd: 0,
   investedPercentOfEquity: undefined,
@@ -110,6 +112,9 @@ describe("createDashboardHttpServer", () => {
     expect(res.headers.get("content-type")).toContain("text/html");
     const body = await res.text();
     expect(body).toContain("<!doctype html>");
+    expect(body).toContain('data-action="renameSelf"');
+    expect(body).toContain('"bocik.selfName." + location.port');
+    expect(body).toContain("const peerPorts = { b: 4174, c: 4175, ...savedPeerPorts }");
 
     // The page's client-side JS is a hand-written template-literal string
     // with no build step to catch a typo/unescaped-quote mistake - this
