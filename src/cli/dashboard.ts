@@ -300,22 +300,30 @@ export function formatAge(ageMs: number): string {
 }
 
 let clearedScrollbackOnce = false;
+let previousRenderLineCount = 0;
 
 export function renderDashboard(s: DashboardState): void {
-  // console.clear() is a no-op on some Windows terminals, which stacks every
-  // refresh under the last one instead of replacing it. \x1b[2J\x1b[H clears
-  // just the visible screen and homes the cursor, which works everywhere
-  // console.clear() does, plus where it doesn't - and, critically, does NOT
-  // touch the terminal's scrollback, so scrolling up to read something
-  // earlier still works. \x1b[3J (which also wipes scrollback) runs only
-  // ONCE, on the very first render, to clear stale content from before this
-  // run started - not on every refresh, which previously reset the view to
-  // the top every second and made scrolling back impossible.
-  const clearSequence = clearedScrollbackOnce ? "\x1b[2J\x1b[H" : "\x1b[2J\x1b[3J\x1b[H";
-  clearedScrollbackOnce = true;
-  process.stdout.write(clearSequence);
-  console.log(formatDashboard(s));
-  console.log(
-    "\ncommands: buy [usd] [a|b|c] [@maxPrice]  cancel [a|b|c]  sell [percent] [a|b|c]  panic [a|b|c]  reset  status  quit",
-  );
+  const body =
+    formatDashboard(s) +
+    "\n\ncommands: buy [usd] [a|b|c] [@maxPrice]  cancel [a|b|c]  sell [percent] [a|b|c]  panic [a|b|c]  reset  status  quit";
+
+  if (!clearedScrollbackOnce) {
+    // \x1b[3J wipes scrollback too - run only ONCE, on the very first
+    // render, to clear stale content from before this run started.
+    process.stdout.write("\x1b[2J\x1b[3J\x1b[H");
+    clearedScrollbackOnce = true;
+  } else if (previousRenderLineCount > 0) {
+    // Redraw in place: move the cursor back up over the previous render,
+    // then erase from there to the end of the screen. This is preferred
+    // over a fresh \x1b[2J\x1b[H every refresh because plain Windows
+    // console windows (conhost outside Windows Terminal - e.g. a classic
+    // cmd.exe window) don't clear \x1b[2J in place; they scroll the whole
+    // viewport into scrollback and blank it, so every refresh pushed a
+    // full screen of blank lines into the buffer and the dashboard
+    // appeared to scroll forever. Moving up + erasing-to-end overwrites
+    // the previous render's lines directly and works the same everywhere.
+    process.stdout.write(`\x1b[${previousRenderLineCount}A\x1b[0J`);
+  }
+  console.log(body);
+  previousRenderLineCount = body.split("\n").length;
 }
