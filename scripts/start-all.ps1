@@ -27,7 +27,11 @@ function Start-BotWindow {
     }
     $lines += "npm run bot"
     $command = $lines -join "; "
-    Start-Process powershell -WorkingDirectory $projectDir -ArgumentList "-NoExit", "-Command", $command
+    # Minimized so three (or more) of these don't take over the screen -
+    # the bot itself doesn't need the window visible to run; open it back
+    # up from the taskbar whenever you actually want to watch the terminal
+    # dashboard or type a command into it.
+    Start-Process powershell -WorkingDirectory $projectDir -WindowStyle Minimized -ArgumentList "-NoExit", "-Command", $command
 }
 
 # Reads DASHBOARD_WEB_ENABLED/DASHBOARD_WEB_PORT straight out of the given
@@ -48,22 +52,47 @@ function Get-DashboardUrl {
 # Start-Process with a bare URL asks Windows to look up the registered
 # handler for "http" - on some machines that association is broken or
 # points somewhere unexpected (seen here opening Notepad instead of a
-# browser). Launching a known browser executable directly with the URL
-# as its argument sidesteps that lookup entirely.
+# browser). Reading the actual default-browser registration out of the
+# registry and launching that .exe directly sidesteps that lookup
+# entirely, and - unlike hardcoding a specific browser - keeps working
+# correctly whatever you have set as your default, including after you
+# change it.
+function Get-DefaultBrowserPath {
+    try {
+        $progId = (Get-ItemProperty "HKCU:\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\http\UserChoice" -ErrorAction Stop).ProgId
+        $cmd = (Get-ItemProperty "Registry::HKEY_CLASSES_ROOT\$progId\shell\open\command" -ErrorAction Stop).'(default)'
+        if ($cmd -match '^"([^"]+)"') {
+            $exePath = $Matches[1]
+            if (Test-Path $exePath) { return $exePath }
+        }
+    } catch {
+        # Fall through - Open-DashboardUrl falls back to a fixed list below.
+    }
+    return $null
+}
+
 function Open-DashboardUrl {
     param([string]$Url)
-    $browserPaths = @(
-        "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe",
-        "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe",
-        "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
-        "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe",
-        "$env:ProgramFiles\Mozilla Firefox\firefox.exe"
-    )
-    $browser = $browserPaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+    $browser = Get-DefaultBrowserPath
+    if (-not $browser) {
+        # Only reached if reading the registered default browser failed
+        # outright (unusual) - a best-effort fallback so this still opens
+        # something rather than nothing.
+        $fallbackPaths = @(
+            "$env:LocalAppData\Programs\Opera GX\opera.exe",
+            "$env:LocalAppData\Programs\Opera\opera.exe",
+            "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe",
+            "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe",
+            "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
+            "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe",
+            "$env:ProgramFiles\Mozilla Firefox\firefox.exe"
+        )
+        $browser = $fallbackPaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+    }
     if ($browser) {
         Start-Process -FilePath $browser -ArgumentList $Url
     } else {
-        Write-Host "Nie znalazlem Edge/Chrome/Firefox w standardowej lokalizacji - otworz recznie: $Url"
+        Write-Host "Nie udalo sie ustalic przegladarki - otworz recznie: $Url"
     }
 }
 
