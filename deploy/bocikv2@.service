@@ -10,7 +10,7 @@ Group=bocikv2
 WorkingDirectory=/opt/bocikv2
 Environment=NODE_ENV=production
 Environment=DOTENV_CONFIG_PATH=/etc/bocikv2/%i.env
-ExecStart=/usr/local/bin/node --max-old-space-size=180 /opt/bocikv2/dist/src/index.js
+ExecStart=/usr/bin/node --max-old-space-size=180 /opt/bocikv2/dist/src/index.js
 Restart=on-failure
 RestartSec=10
 TimeoutStopSec=30
