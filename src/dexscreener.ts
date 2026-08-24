@@ -40,10 +40,29 @@ export function pickDeepestPair(pairs: DexScreenerPair[]): DexScreenerPair | und
   }, undefined);
 }
 
+const DEFAULT_TIMEOUT_MS = 8_000;
+
 export async function fetchDexScreenerSnapshot(
   tokenMint: string,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
 ): Promise<DexScreenerSnapshot | undefined> {
-  const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenMint}`);
+  // This is a best-effort, one-shot startup call (see the caller) - if
+  // DexScreener accepts the connection but never answers (rate limit,
+  // an overloaded backend, ...), a plain fetch() with no deadline just
+  // hangs forever with no error and no log line, which froze the whole
+  // bot at startup before it printed anything. AbortController turns
+  // that silent hang into a normal rejection the caller already
+  // catches and falls back from.
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  let res: Response;
+  try {
+    res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenMint}`, {
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
   if (!res.ok) return undefined;
   const body = (await res.json()) as DexScreenerResponse;
   const pairs = body.pairs ?? [];

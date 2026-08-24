@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { pickDeepestPair } from "../src/dexscreener.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { fetchDexScreenerSnapshot, pickDeepestPair } from "../src/dexscreener.js";
 
 describe("pickDeepestPair", () => {
   it("picks the pair with the most liquidity", () => {
@@ -18,5 +18,43 @@ describe("pickDeepestPair", () => {
 
   it("returns undefined for an empty list", () => {
     expect(pickDeepestPair([])).toBeUndefined();
+  });
+});
+
+describe("fetchDexScreenerSnapshot", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("gives up instead of hanging forever when DexScreener accepts the request but never answers", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string, init?: RequestInit) => {
+        return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            const err = new Error("The operation was aborted");
+            err.name = "AbortError";
+            reject(err);
+          });
+        });
+      }),
+    );
+
+    await expect(fetchDexScreenerSnapshot("someMint", 20)).rejects.toThrow();
+  });
+
+  it("still returns a parsed snapshot on a normal, fast response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          pairs: [{ dexId: "raydium", priceUsd: "0.025", priceChange: { m5: 1.5 }, liquidity: { usd: 1000 } }],
+        }),
+      })),
+    );
+
+    const snapshot = await fetchDexScreenerSnapshot("someMint", 20);
+    expect(snapshot?.priceChangePercent.m5).toBe(1.5);
   });
 });
