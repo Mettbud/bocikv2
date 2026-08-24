@@ -29,6 +29,13 @@ const envSchema = z.object({
 
   TRADING_MODE: z.enum(["paper", "live"]).default("paper"),
   PAPER_BALANCE_USD: numeric(1000),
+  // Master switch, ON by default (unchanged behavior). When false: no slot
+  // ever buys on its own (no auto rebuy, no Slot B/C reinforcement, no
+  // breakout buy) - full manual control over every entry via "buy"/
+  // "buy ... @price" in the console. Selling stays fully automatic
+  // regardless (target/stop-loss/trailing stop keep managing whatever
+  // positions are already open) - this only gates new BUYS.
+  AUTO_BUY_ENABLED: boolFlag(true),
 
   // Two independent slots, each sized as a fixed % of the STARTING
   // portfolio value (PAPER_BALANCE_USD in paper mode, or whatever the
@@ -232,6 +239,7 @@ function buildConfig(env: z.infer<typeof envSchema>) {
       minSolReserve: env.MIN_SOL_RESERVE,
     },
     strategy: {
+      autoBuyEnabled: env.AUTO_BUY_ENABLED,
       targetGainPercent: env.TARGET_GAIN_PERCENT,
       minNetProfitPercent: env.MIN_NET_PROFIT_PERCENT,
       rebuyDropPercent: env.REBUY_DROP_PERCENT,

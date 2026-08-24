@@ -338,6 +338,10 @@ async function main() {
       return;
     }
     if (s.slotA.phase !== "AWAITING_BUY") return;
+    // AUTO_BUY_ENABLED=false: no slot ever buys on its own - manual "buy"/
+    // "buy ... @price" commands still work (they call executeBuy directly,
+    // not through here), only the automatic paths below are gated.
+    if (!config.strategy.autoBuyEnabled) return;
 
     // The spread gate itself lives in executeBuy (it applies to manual buys
     // too) - this just decides whether it's worth checking this tick at all.
@@ -364,7 +368,7 @@ async function main() {
       await evaluatePosition("B", currentPriceUsd, solUsd);
       return;
     }
-    if (flip.phase !== "AWAITING_BUY" || !config.strategy.dualSlotEnabled) return;
+    if (flip.phase !== "AWAITING_BUY" || !config.strategy.dualSlotEnabled || !config.strategy.autoBuyEnabled) return;
 
     const triggerDropPercent = computeCurrentTriggerDropPercent();
     if (isReinforcementBuySignal(s.slotA, s.slotB, currentPriceUsd, triggerDropPercent)) {
@@ -386,7 +390,7 @@ async function main() {
       await evaluatePosition("C", currentPriceUsd, solUsd);
       return;
     }
-    if (flip.phase !== "AWAITING_BUY" || !config.strategy.slotCEnabled) return;
+    if (flip.phase !== "AWAITING_BUY" || !config.strategy.slotCEnabled || !config.strategy.autoBuyEnabled) return;
 
     const triggerDropPercent = computeCurrentSlotCTriggerDropPercent();
     if (isReinforcementBuySignal(s.slotA, s.slotC, currentPriceUsd, triggerDropPercent)) {
@@ -1266,6 +1270,7 @@ async function main() {
     return {
       tokenSymbol: config.token.symbol,
       mode: config.mode === "live" ? "LIVE" : "PAPER",
+      autoBuyEnabled: config.strategy.autoBuyEnabled,
       priceUsd: latestPriceUsd,
       slotA,
       slotB,

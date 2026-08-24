@@ -91,6 +91,8 @@ export interface RecentTrade {
 export interface DashboardState {
   tokenSymbol: string;
   mode: "PAPER" | "LIVE";
+  /** AUTO_BUY_ENABLED - true is the default (unchanged behavior), so this only ever needs to show up when false. */
+  autoBuyEnabled: boolean;
   priceUsd: number | undefined;
   slotA: SlotDashboardState;
   slotB: SlotDashboardState;
@@ -164,6 +166,9 @@ export function formatDashboard(s: DashboardState): string {
 
   lines.push("");
   lines.push(`Mode: ${colorize(s.mode, modeColor)}`);
+  if (!s.autoBuyEnabled) {
+    lines.push(colorize("AUTO_BUY_ENABLED=false - żaden slot nie kupi sam, tylko ręczne \"buy\"", colors.YELLOW));
+  }
 
   return lines.join("\n");
 }

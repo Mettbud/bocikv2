@@ -31,6 +31,7 @@ const flatSlotB: SlotDashboardState = {
 const base: DashboardState = {
   tokenSymbol: "CYBERLEEK",
   mode: "PAPER",
+  autoBuyEnabled: true,
   priceUsd: 0.02521136,
   slotA: flatSlotA,
   slotB: flatSlotB,
@@ -58,6 +59,16 @@ describe("formatDashboard", () => {
     expect(out).toContain("$0.02521136");
     expect(out).toContain("Mode: ");
     expect(out).toContain("PAPER");
+  });
+
+  it("shows no warning when AUTO_BUY_ENABLED is true (default)", () => {
+    const out = formatDashboard(base);
+    expect(out).not.toContain("AUTO_BUY_ENABLED=false");
+  });
+
+  it("shows a warning when AUTO_BUY_ENABLED is false", () => {
+    const out = formatDashboard({ ...base, autoBuyEnabled: false });
+    expect(out).toContain("AUTO_BUY_ENABLED=false");
   });
 
   it("shows the rebuy trigger for Slot A once a prior sell exists", () => {

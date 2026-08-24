@@ -74,6 +74,15 @@ handlu", nie tylko "ta transakcja jest za droga". Domyślnie `MAX_SPREAD_BPS=100
 
 ## Jak działa strategia (`src/strategy.ts`)
 
+**`AUTO_BUY_ENABLED=false`** (domyślnie **włączone**, bez zmiany
+zachowania) to główny wyłącznik automatycznych kupna - gdy false, żaden
+slot nigdy nie kupuje sam z siebie (bez auto-odkupu Slotu A, bez dobicia
+Slotu B/C, bez breakout buy), tylko ręczne `buy`/`buy ... @cena` w konsoli.
+Sprzedaż zostaje zawsze w pełni automatyczna - cel, stop-loss i trailing
+stop nadal zarządzają każdą już otwartą pozycją bez zmian. Przydatne, gdy
+chcesz pełną ręczną kontrolę nad tym, kiedy i po ile bot wchodzi w rynek,
+ale nie chcesz pilnować wyjścia ręcznie.
+
 Jeden stan na raz, bez uśredniania pozycji, bez kaskadowych częściowych
 wyjść:
 
