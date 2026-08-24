@@ -54,6 +54,16 @@ export interface FlipState {
    */
   breakoutPeakUsd: number | null;
   completedFlips: number;
+  /**
+   * Set true whenever a MANUAL sell/panic closes this slot's position -
+   * "I wanted OUT" shouldn't be immediately followed by the bot buying
+   * back in on its own the very next tick. Blocks every automatic buy path
+   * (rebuy, reinforcement, breakout) until a manual "buy" opens the next
+   * position, which clears it (see afterBuy). An automatic sell (target/
+   * stop-loss/trailing stop/stagnation) never sets this - that's the
+   * strategy working as intended, not you overriding it.
+   */
+  requireManualNextBuy: boolean;
 }
 
 export function initialFlipState(): FlipState {
@@ -67,6 +77,7 @@ export function initialFlipState(): FlipState {
     peakPriceUsd: null,
     breakoutPeakUsd: null,
     completedFlips: 0,
+    requireManualNextBuy: false,
   };
 }
 
@@ -100,6 +111,7 @@ export function isBuySignal(
   requireManualFirstEntry = false,
 ): boolean {
   if (state.phase !== "AWAITING_BUY") return false;
+  if (state.requireManualNextBuy) return false;
   // No prior sell yet: this is the very first entry into the strategy.
   if (state.lastSellPrice === null) return !requireManualFirstEntry;
   return currentPrice <= rebuyTriggerPrice(state.lastSellPrice, rebuyDropPercent);
@@ -132,6 +144,7 @@ export function isReinforcementBuySignal(
   triggerDropPercent: number,
 ): boolean {
   if (slotB.phase !== "AWAITING_BUY") return false;
+  if (slotB.requireManualNextBuy) return false;
   if (slotA.phase !== "AWAITING_SELL" || slotA.buyPrice === null) return false;
   return grossMovePercent(slotA.buyPrice, currentPrice) <= -triggerDropPercent;
 }
@@ -220,6 +233,7 @@ export function isBreakoutBuySignal(
   pullbackPercent: number,
 ): boolean {
   if (state.phase !== "AWAITING_BUY" || state.lastSellPrice === null || state.breakoutPeakUsd === null) return false;
+  if (state.requireManualNextBuy) return false;
   if (state.breakoutPeakUsd <= state.lastSellPrice) return false;
   const dropFromPeakPercent = grossMovePercent(state.breakoutPeakUsd, currentPrice);
   return dropFromPeakPercent <= -pullbackPercent;
@@ -269,10 +283,19 @@ export function afterBuy(
     targetGainPercent,
     peakPriceUsd: fillPrice,
     breakoutPeakUsd: null,
+    // Whatever we were waiting on manual confirmation for, we just got it.
+    requireManualNextBuy: false,
   };
 }
 
-export function afterSell(state: FlipState, fillPrice: number): FlipState {
+/**
+ * `requireManualNextBuy`: true for a MANUAL/PANIC sell - "I wanted OUT"
+ * shouldn't be immediately followed by the bot buying back in on its own.
+ * false (default) for an automatic sell (target/stop-loss/trailing stop/
+ * stagnation) - that's the strategy working as intended, so the normal
+ * automatic rebuy stays enabled.
+ */
+export function afterSell(state: FlipState, fillPrice: number, requireManualNextBuy = false): FlipState {
   return {
     ...state,
     phase: "AWAITING_BUY",
@@ -284,5 +307,6 @@ export function afterSell(state: FlipState, fillPrice: number): FlipState {
     breakoutPeakUsd: null,
     lastSellPrice: fillPrice,
     completedFlips: state.completedFlips + 1,
+    requireManualNextBuy,
   };
 }

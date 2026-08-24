@@ -526,15 +526,37 @@ próba może failować identycznie w kółko.
 
 Po `AUTO_BUY_FAILURE_LIMIT` (domyślnie 3) nieudanych próbach **z rzędu** dla
 danego slotu, bot **wstrzymuje automatyczne kupno tego slotu** na
-`AUTO_BUY_COOLDOWN_MS` (domyślnie 10 minut), zamiast próbować w kółko co
+`AUTO_BUY_COOLDOWN_MS` (domyślnie 5 minut), zamiast próbować w kółko co
 tick bez końca. Ręczne `buy`/`buy ... @cena` nadal działa normalnie w tym
 czasie. Licznik i wstrzymanie resetują się przy pierwszym udanym kupnie
 (automatycznym albo ręcznym). Dashboard pokazuje to wyraźnie w bloku danego
 slotu: `Auto-kupno WSTRZYMANE (Xs)`.
 
+Jeśli problem nie ustępuje - kolejny cykl 3 nieudanych prób z rzędu po
+wznowieniu - cooldown **podwaja się** przy każdym kolejnym wstrzymaniu
+(5 min → 10 min → 20 min → ...), aż do sufitu `AUTO_BUY_MAX_COOLDOWN_MS`
+(domyślnie 1 godzina). Eskalacja resetuje się do zera po pierwszym udanym
+automatycznym kupnie. Dzięki temu bot nie wali RPC/Jupitera w nieskończoność
+identycznym failującym requestem co kilkanaście sekund przez całą noc, ale
+też nie próbuje w kółko z tą samą częstotliwością bez końca, jeśli problem
+jest trwały.
+
 Osobno: błąd w jednym slocie (np. Slot B ciągle failuje) **nigdy nie
 blokuje** ewaluacji pozostałych slotów w tym samym ticku - każdy slot jest
 sprawdzany niezależnie, z własnym łapaniem błędów.
+
+## Ręczna sprzedaż nie wywołuje auto-rebuy
+
+Jeśli sprzedasz pozycję ręcznie (`sell`/`sell 50`) albo użyjesz `panic`, bot
+**nie kupi automatycznie z powrotem** na tym slocie - "chciałem wyjść" nie
+powinno być natychmiast nadpisane przez bota kupującego z powrotem na
+najbliższym ticku. Żeby slot znów zaczął handlować, trzeba wpisać `buy`
+ręcznie - to otwiera nową pozycję i od tego momentu automatyka (rebuy,
+wzmocnienie B, breakout) znów działa normalnie.
+
+Automatyczna sprzedaż (target, stop-loss, trailing stop, stagnacja) **nie**
+ustawia tej blokady - to strategia działa zgodnie z planem, więc auto-rebuy
+działa dalej jak zwykle.
 
 ## Świadome uproszczenia względem `botrade`
 

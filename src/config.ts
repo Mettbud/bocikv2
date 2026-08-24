@@ -36,6 +36,19 @@ const envSchema = z.object({
   // regardless (target/stop-loss/trailing stop keep managing whatever
   // positions are already open) - this only gates new BUYS.
   AUTO_BUY_ENABLED: boolFlag(true),
+  // Circuit breaker for automatic buys (never sells) - after this many
+  // consecutive real failures (an actual on-chain/simulation rejection,
+  // not just a normal "conditions aren't right" skip) in a row for a slot,
+  // auto-buy for that slot pauses instead of retrying every tick forever.
+  // Manual "buy" always still works. See AUTO_BUY_COOLDOWN_MS below.
+  AUTO_BUY_FAILURE_LIMIT: numeric(3),
+  // How long a pause lasts the FIRST time it triggers. Doubles each time it
+  // re-triggers without a successful buy in between (5 -> 10 -> 20 -> 40
+  // min...), capped at AUTO_BUY_MAX_COOLDOWN_MS - a persistent problem gets
+  // backed off harder over time instead of hammering on the same fixed
+  // interval forever. Resets to this base value on any successful buy.
+  AUTO_BUY_COOLDOWN_MS: numeric(5 * 60 * 1000),
+  AUTO_BUY_MAX_COOLDOWN_MS: numeric(60 * 60 * 1000),
 
   // Two independent slots, each sized as a fixed % of the STARTING
   // portfolio value (PAPER_BALANCE_USD in paper mode, or whatever the
@@ -240,6 +253,9 @@ function buildConfig(env: z.infer<typeof envSchema>) {
     },
     strategy: {
       autoBuyEnabled: env.AUTO_BUY_ENABLED,
+      autoBuyFailureLimit: env.AUTO_BUY_FAILURE_LIMIT,
+      autoBuyCooldownMs: env.AUTO_BUY_COOLDOWN_MS,
+      autoBuyMaxCooldownMs: env.AUTO_BUY_MAX_COOLDOWN_MS,
       targetGainPercent: env.TARGET_GAIN_PERCENT,
       minNetProfitPercent: env.MIN_NET_PROFIT_PERCENT,
       rebuyDropPercent: env.REBUY_DROP_PERCENT,

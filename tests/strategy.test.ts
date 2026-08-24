@@ -104,7 +104,45 @@ describe("flip strategy state machine", () => {
     expect(state.targetGainPercent).toBeNull();
     expect(state.lastSellPrice).toBe(1.06);
   });
+
+  it("a manual/panic sell blocks every automatic buy path until a manual buy clears it", () => {
+    let state = afterBuy(initialFlipState(), 1.0, 100, {
+      buyLegPercent: 0.3,
+      buyNetworkFeeLamports: 10_000,
+      costUsd: 50,
+    }, 6);
+    state = afterSell(state, 1.1, true); // manual/panic sell
+    expect(state.requireManualNextBuy).toBe(true);
+
+    // Automatic rebuy is suppressed even though price fell back below lastSellPrice.
+    expect(isBuySignal(state, 1.0, 0)).toBe(false);
+    expect(isReinforcementBuySignal(openSlotAFixture(), state, 1.0, 5)).toBe(false);
+    expect(isBreakoutBuySignal(state, 0.9, 5)).toBe(false);
+
+    // A manual buy (afterBuy) clears the flag, restoring normal automatic behavior afterward.
+    const reopened = afterBuy(state, 1.0, 100, { buyLegPercent: 0.3, buyNetworkFeeLamports: 10_000, costUsd: 50 }, 6);
+    expect(reopened.requireManualNextBuy).toBe(false);
+  });
+
+  it("an automatic sell (target/stop-loss/trailing/stagnation) does NOT block the next auto-buy", () => {
+    let state = afterBuy(initialFlipState(), 1.0, 100, {
+      buyLegPercent: 0.3,
+      buyNetworkFeeLamports: 10_000,
+      costUsd: 50,
+    }, 6);
+    state = afterSell(state, 1.06); // default: automatic sell
+    expect(state.requireManualNextBuy).toBe(false);
+    expect(isBuySignal(state, 1.06, 0)).toBe(true);
+  });
 });
+
+function openSlotAFixture() {
+  return afterBuy(initialFlipState(), 1.0, 100, {
+    buyLegPercent: 0.3,
+    buyNetworkFeeLamports: 10_000,
+    costUsd: 50,
+  }, 6);
+}
 
 describe("Slot B reinforcement trigger", () => {
   const openSlotA = afterBuy(initialFlipState(), 1.0, 100, {

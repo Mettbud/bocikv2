@@ -144,11 +144,20 @@ async function main() {
   // quote/swap (e.g. an unusual transfer mechanism) can fail identically on
   // every single attempt - without this, the bot would hammer the same
   // doomed buy every tick forever, burning RPC/Jupiter calls for nothing.
-  // Resets to 0 on any successful buy (auto or manual) for that slot.
-  const AUTO_BUY_FAILURE_LIMIT = 3;
-  const AUTO_BUY_COOLDOWN_MS = 10 * 60 * 1000;
+  // Escalates (doubles, capped) each time it re-triggers without an
+  // intervening successful buy - a persistent problem gets backed off
+  // harder over time instead of retrying on the same fixed interval
+  // forever. Resets fully (failures, cooldown, escalation) on any
+  // successful buy (auto or manual) for that slot.
+  const AUTO_BUY_FAILURE_LIMIT = config.strategy.autoBuyFailureLimit;
+  const AUTO_BUY_BASE_COOLDOWN_MS = config.strategy.autoBuyCooldownMs;
+  const AUTO_BUY_MAX_COOLDOWN_MS = config.strategy.autoBuyMaxCooldownMs;
   const autoBuyFailures: Record<SlotKey, number> = { A: 0, B: 0, C: 0 };
   const autoBuyPausedUntilMs: Record<SlotKey, number | null> = { A: null, B: null, C: null };
+  // How many pause cycles in a row without a successful buy in between -
+  // drives the doubling. NOT reset just because a cooldown window expired
+  // and a retry is due; only a real success resets it.
+  const autoBuyEscalation: Record<SlotKey, number> = { A: 0, B: 0, C: 0 };
 
   function isAutoBuyPaused(slotKey: SlotKey): boolean {
     const until = autoBuyPausedUntilMs[slotKey];
@@ -167,8 +176,10 @@ async function main() {
       error: String((err as Error).message ?? err),
     });
     if (autoBuyFailures[slotKey] >= AUTO_BUY_FAILURE_LIMIT) {
-      autoBuyPausedUntilMs[slotKey] = Date.now() + AUTO_BUY_COOLDOWN_MS;
-      const msg = `Slot ${slotKey}: auto-buy WSTRZYMANE na ${Math.round(AUTO_BUY_COOLDOWN_MS / 60000)} min po ${AUTO_BUY_FAILURE_LIMIT} nieudanych próbach z rzędu (prawdopodobnie problem strukturalny, nie zwykły poślizg) - ręczne "buy" nadal działa`;
+      autoBuyEscalation[slotKey] += 1;
+      const cooldownMs = Math.min(AUTO_BUY_BASE_COOLDOWN_MS * 2 ** (autoBuyEscalation[slotKey] - 1), AUTO_BUY_MAX_COOLDOWN_MS);
+      autoBuyPausedUntilMs[slotKey] = Date.now() + cooldownMs;
+      const msg = `Slot ${slotKey}: auto-buy WSTRZYMANE na ${Math.round(cooldownMs / 60000)} min po ${AUTO_BUY_FAILURE_LIMIT} nieudanych próbach z rzędu (${autoBuyEscalation[slotKey] > 1 ? `eskalacja x${autoBuyEscalation[slotKey]}, ` : ""}prawdopodobnie problem strukturalny, nie zwykły poślizg) - ręczne "buy" nadal działa`;
       setEvent(msg);
       log.warn(msg);
     }
@@ -834,6 +845,7 @@ async function main() {
       // the pipeline itself is working, so clear any past-failure streak.
       autoBuyFailures[slotKey] = 0;
       autoBuyPausedUntilMs[slotKey] = null;
+      autoBuyEscalation[slotKey] = 0;
     } catch (err) {
       if (opts.tag === "AUTO") registerAutoBuyFailure(slotKey, err);
       throw err;
@@ -1111,7 +1123,7 @@ async function main() {
     const fillPriceUsd = proceedsUsd / tokenAmount;
     const closingPosition = percentOfPosition >= 100;
     if (closingPosition) {
-      setFlip(slotKey, afterSell(flip, fillPriceUsd));
+      setFlip(slotKey, afterSell(flip, fillPriceUsd, tag === "MANUAL" || tag === "PANIC"));
       trailingStopPendingSinceMs[slotKey] = null;
       peakUpdatedAtMs[slotKey] = null;
     } else {
