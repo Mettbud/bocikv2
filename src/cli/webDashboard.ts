@@ -1,4 +1,5 @@
 import { createServer, type Server } from "node:http";
+import { timingSafeEqual } from "node:crypto";
 import type { DashboardState } from "./dashboard.js";
 import { handleLine, type CommandDeps } from "./commands.js";
 import type { Logger } from "../logger.js";
@@ -104,9 +105,53 @@ export function createDashboardHttpServer(getSnapshot: () => DashboardState, dep
  * separate port, so hiding buttons in the browser cannot be bypassed by
  * manually POSTing to the control dashboard's command endpoint.
  */
-export function createReadOnlyDashboardHttpServer(getSnapshot: () => DashboardState): Server {
+export interface ReadOnlyDashboardAuth {
+  username: string;
+  password: string;
+}
+
+function safeTextEqual(actual: string, expected: string): boolean {
+  const actualBytes = Buffer.from(actual);
+  const expectedBytes = Buffer.from(expected);
+  return actualBytes.length === expectedBytes.length && timingSafeEqual(actualBytes, expectedBytes);
+}
+
+function hasReadOnlyAccess(
+  req: import("node:http").IncomingMessage,
+  auth?: ReadOnlyDashboardAuth,
+): boolean {
+  if (!auth || (!auth.username && !auth.password)) return true;
+  const header = req.headers.authorization;
+  if (!header?.startsWith("Basic ")) return false;
+  let decoded: string;
+  try {
+    decoded = Buffer.from(header.slice(6), "base64").toString("utf8");
+  } catch {
+    return false;
+  }
+  const separator = decoded.indexOf(":");
+  if (separator < 0) return false;
+  return (
+    safeTextEqual(decoded.slice(0, separator), auth.username) &&
+    safeTextEqual(decoded.slice(separator + 1), auth.password)
+  );
+}
+
+export function createReadOnlyDashboardHttpServer(
+  getSnapshot: () => DashboardState,
+  auth?: ReadOnlyDashboardAuth,
+): Server {
   return createServer((req, res) => {
     applyCors(req, res, false);
+    if (!hasReadOnlyAccess(req, auth)) {
+      res.writeHead(401, {
+        "Content-Type": "text/plain; charset=utf-8",
+        "WWW-Authenticate": 'Basic realm="bocik read-only", charset="UTF-8"',
+        "Cache-Control": "no-store",
+      });
+      res.end("authentication required");
+      return;
+    }
     if (req.method === "OPTIONS") {
       res.writeHead(204);
       res.end();
@@ -120,6 +165,11 @@ export function createReadOnlyDashboardHttpServer(getSnapshot: () => DashboardSt
     if (req.method === "GET" && (req.url === "/" || req.url === "/index.html")) {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end(readOnlyPageHtml());
+      return;
+    }
+    if (req.method === "GET" && (req.url === "/live" || req.url === "/live/")) {
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(readOnlyPageHtml(true));
       return;
     }
     res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
@@ -153,8 +203,9 @@ export function startReadOnlyWebDashboard(
   getSnapshot: () => DashboardState,
   port: number,
   logger: Logger,
+  auth?: ReadOnlyDashboardAuth,
 ): { close: () => void } {
-  const server = createReadOnlyDashboardHttpServer(getSnapshot);
+  const server = createReadOnlyDashboardHttpServer(getSnapshot, auth);
 
   server.on("error", (err) => {
     logger.warn("read-only web dashboard failed to start - continuing without it", {
@@ -170,11 +221,15 @@ export function startReadOnlyWebDashboard(
   return { close: () => server.close() };
 }
 
-function readOnlyPageHtml(): string {
+function readOnlyPageHtml(selfOnly = false): string {
   return PAGE_HTML
-    .replace("<body>", '<body class="read-only">')
-    .replace("<h1>bocik</h1>", "<h1>bocik — podgląd tylko</h1>")
+    .replace("<body>", `<body class="read-only${selfOnly ? " self-only" : ""}">`)
+    .replace(
+      "<h1>bocik</h1>",
+      selfOnly ? "<h1>LIVE — podgląd tylko</h1>" : "<h1>bocik — podgląd tylko</h1>",
+    )
     .replace("const READ_ONLY = false;", "const READ_ONLY = true;")
+    .replace("const SELF_ONLY = false;", `const SELF_ONLY = ${selfOnly ? "true" : "false"};`)
     .replace(
       "const peerPorts = { b: 4174, c: 4175, ...savedPeerPorts };",
       "const peerPorts = { b: 4274, c: 4275, ...savedPeerPorts };",
@@ -314,6 +369,7 @@ function row(label, valueHtml) {
 }
 
 const READ_ONLY = false;
+const SELF_ONLY = false;
 
 const slotCollapsed = JSON.parse(localStorage.getItem("bocik.slotCollapsed") || "{}");
 const instanceCollapsed = JSON.parse(localStorage.getItem("bocik.instanceCollapsed") || "{}");
@@ -609,9 +665,17 @@ function applySelfName() {
 applySelfName();
 
 tick("self");
-initPeer("b");
-initPeer("c");
-setInterval(() => { tick("self"); tick("b"); tick("c"); }, 1000);
+if (SELF_ONLY) {
+  panelEl("b").style.display = "none";
+  panelEl("c").style.display = "none";
+} else {
+  initPeer("b");
+  initPeer("c");
+}
+setInterval(() => {
+  tick("self");
+  if (!SELF_ONLY) { tick("b"); tick("c"); }
+}, 1000);
 </script>
 </body>
 </html>

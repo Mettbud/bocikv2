@@ -26,7 +26,12 @@ describe("ready environment profiles", () => {
       expect(raw.JUPITER_API_KEY).toBe("");
       expect(config.mode).toBe(profile.mode);
       expect(config.dashboardWeb).toEqual({ enabled: true, port: profile.port });
-      expect(config.dashboardReadOnlyWeb).toEqual({ enabled: true, port: profile.readOnlyPort });
+      expect(config.dashboardReadOnlyWeb).toEqual({
+        enabled: true,
+        port: profile.readOnlyPort,
+        authUsername: "",
+        authPassword: "",
+      });
       expect(config.files.state).toBe(profile.state);
       expect(config.strategy.slotCEnabled).toBe(profile.slotCEnabled);
       expect(config.trade.slotCSizePercent).toBe(30);

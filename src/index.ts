@@ -347,6 +347,10 @@ async function main() {
       buildSnapshot,
       config.dashboardReadOnlyWeb.port,
       log,
+      {
+        username: config.dashboardReadOnlyWeb.authUsername,
+        password: config.dashboardReadOnlyWeb.authPassword,
+      },
     );
   }
 

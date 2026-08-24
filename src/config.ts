@@ -231,6 +231,8 @@ const envSchema = z.object({
   // buy/sell/panic controls available on DASHBOARD_WEB_PORT.
   DASHBOARD_READONLY_WEB_ENABLED: boolFlag(false),
   DASHBOARD_READONLY_WEB_PORT: numeric(4273),
+  DASHBOARD_READONLY_AUTH_USERNAME: z.string().default(""),
+  DASHBOARD_READONLY_AUTH_PASSWORD: z.string().default(""),
 
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
   LOG_FILE: z.string().default("./data/bot.log"),
@@ -320,6 +322,8 @@ function buildConfig(env: z.infer<typeof envSchema>) {
     dashboardReadOnlyWeb: {
       enabled: env.DASHBOARD_READONLY_WEB_ENABLED,
       port: env.DASHBOARD_READONLY_WEB_PORT,
+      authUsername: env.DASHBOARD_READONLY_AUTH_USERNAME,
+      authPassword: env.DASHBOARD_READONLY_AUTH_PASSWORD,
     },
     log: { level: env.LOG_LEVEL, file: env.LOG_FILE, logSkips: env.DRY_RUN_LOG_SKIPS },
     files: { state: env.STATE_FILE, tradesCsv: env.TRADES_CSV },
@@ -330,6 +334,14 @@ export function loadConfig(rawEnv: NodeJS.ProcessEnv = process.env): BotConfig {
   const parsed = envSchema.parse(rawEnv);
   if (parsed.TRADING_MODE === "live" && !parsed.WALLET_PRIVATE_KEY) {
     throw new Error("WALLET_PRIVATE_KEY is required when TRADING_MODE=live.");
+  }
+  if (
+    Boolean(parsed.DASHBOARD_READONLY_AUTH_USERNAME) !==
+    Boolean(parsed.DASHBOARD_READONLY_AUTH_PASSWORD)
+  ) {
+    throw new Error(
+      "DASHBOARD_READONLY_AUTH_USERNAME and DASHBOARD_READONLY_AUTH_PASSWORD must either both be set or both be empty.",
+    );
   }
   return buildConfig(parsed);
 }

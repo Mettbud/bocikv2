@@ -242,6 +242,49 @@ describe("createReadOnlyDashboardHttpServer", () => {
     expect(page).toContain("const peerPorts = { b: 4274, c: 4275, ...savedPeerPorts }");
   });
 
+  it("serves a mobile LIVE-only view without the PAPER peer panels", async () => {
+    server = createReadOnlyDashboardHttpServer(() => state);
+    const port = await listenOnEphemeralPort(server);
+    const page = await (await fetch(`http://127.0.0.1:${port}/live`)).text();
+
+    expect(page).toContain("LIVE — podgląd tylko");
+    expect(page).toContain("const SELF_ONLY = true;");
+    expect(() => new Function([...page.matchAll(/<script>([\s\S]*?)<\/script>/g)][0]?.[1] ?? "")).not.toThrow();
+  });
+
+  it("requires valid Basic auth when credentials are configured", async () => {
+    server = createReadOnlyDashboardHttpServer(() => state, {
+      username: "viewer",
+      password: "correct horse battery staple",
+    });
+    const port = await listenOnEphemeralPort(server);
+
+    const anonymous = await fetch(`http://127.0.0.1:${port}/api/state`);
+    expect(anonymous.status).toBe(401);
+    expect(anonymous.headers.get("www-authenticate")).toContain("Basic");
+
+    const wrong = await fetch(`http://127.0.0.1:${port}/api/state`, {
+      headers: { Authorization: `Basic ${Buffer.from("viewer:wrong").toString("base64")}` },
+    });
+    expect(wrong.status).toBe(401);
+
+    const valid = await fetch(`http://127.0.0.1:${port}/api/state`, {
+      headers: {
+        Authorization: `Basic ${Buffer.from("viewer:correct horse battery staple").toString("base64")}`,
+      },
+    });
+    expect(valid.status).toBe(200);
+
+    const command = await fetch(`http://127.0.0.1:${port}/api/command`, {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${Buffer.from("viewer:correct horse battery staple").toString("base64")}`,
+      },
+      body: "{}",
+    });
+    expect(command.status).toBe(404);
+  });
+
   it("has no command endpoint, even for a manually crafted POST", async () => {
     const manualBuy = vi.fn().mockResolvedValue(undefined);
     server = createReadOnlyDashboardHttpServer(() => state);
