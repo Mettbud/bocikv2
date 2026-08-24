@@ -31,6 +31,7 @@ import { computeFixedSlotTradeUsd } from "./sizing.js";
 import { computeAdaptiveTargetPercent, trimOldSamples, windowStats, type PriceSample } from "./volatility.js";
 import { renderDashboard, type DashboardState, type SlotDashboardState } from "./cli/dashboard.js";
 import { startCommandLoop, type SlotKey } from "./cli/commands.js";
+import { startWebDashboard } from "./cli/webDashboard.js";
 
 /** Per-slot numbers shown on the dashboard that only make sense "as of the last check". */
 interface SlotLive {
@@ -286,9 +287,11 @@ async function main() {
   });
 
   let running = true;
+  let webDashboard: { close: () => void } | undefined;
   const stop = () => {
     if (!running) return;
     running = false;
+    webDashboard?.close();
     log.info("shutting down");
   };
   process.on("SIGINT", stop);
@@ -332,6 +335,10 @@ async function main() {
     rebase: rebaseInitialPortfolio,
     onExit: stop,
   });
+
+  if (config.dashboardWeb.enabled) {
+    webDashboard = startWebDashboard(buildSnapshot, config.dashboardWeb.port, log);
+  }
 
   let tickFailureCount = 0;
   let lastTickFailureMessage = "";

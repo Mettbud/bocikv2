@@ -217,6 +217,15 @@ const envSchema = z.object({
   PRICE_POLL_INTERVAL_MS: numeric(5000),
   PRICE_REFERENCE_SOL_AMOUNT: numeric(0.01),
   DASHBOARD_REFRESH_MS: numeric(1000),
+  // Optional: a tiny localhost-only web page mirroring the same dashboard
+  // data, refreshed by the browser instead of the terminal. Exists purely
+  // because terminal-based live redraws (ANSI cursor movement) turned out
+  // to be unreliable on at least one real Windows console even though
+  // basic color codes worked fine there - a browser has no such problem,
+  // it just re-renders the DOM. Off by default so nothing changes unless
+  // you opt in; each concurrently-run instance (A/B/C) needs its own port.
+  DASHBOARD_WEB_ENABLED: boolFlag(false),
+  DASHBOARD_WEB_PORT: numeric(4173),
 
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
   LOG_FILE: z.string().default("./data/bot.log"),
@@ -302,6 +311,7 @@ function buildConfig(env: z.infer<typeof envSchema>) {
     pricePollIntervalMs: env.PRICE_POLL_INTERVAL_MS,
     priceReferenceSolAmount: env.PRICE_REFERENCE_SOL_AMOUNT,
     dashboardRefreshMs: env.DASHBOARD_REFRESH_MS,
+    dashboardWeb: { enabled: env.DASHBOARD_WEB_ENABLED, port: env.DASHBOARD_WEB_PORT },
     log: { level: env.LOG_LEVEL, file: env.LOG_FILE, logSkips: env.DRY_RUN_LOG_SKIPS },
     files: { state: env.STATE_FILE, tradesCsv: env.TRADES_CSV },
   };
