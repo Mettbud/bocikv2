@@ -29,7 +29,7 @@ import { appendTrade, loadState, saveState, type PersistedState } from "./ledger
 import { executeLeg, priceLeg } from "./trader.js";
 import { computeFixedSlotTradeUsd } from "./sizing.js";
 import { computeAdaptiveTargetPercent, trimOldSamples, windowStats, type PriceSample } from "./volatility.js";
-import { printFullDashboard, renderDashboard, type DashboardState, type SlotDashboardState } from "./cli/dashboard.js";
+import { renderDashboard, type DashboardState, type SlotDashboardState } from "./cli/dashboard.js";
 import { startCommandLoop, type SlotKey } from "./cli/commands.js";
 
 /** Per-slot numbers shown on the dashboard that only make sense "as of the last check". */
@@ -330,7 +330,6 @@ async function main() {
           ]).then(() => undefined),
     reset: resetPaperSession,
     rebase: rebaseInitialPortfolio,
-    printStatus: () => printFullDashboard(buildSnapshot()),
     onExit: stop,
   });
 

@@ -30,8 +30,6 @@ export interface CommandDeps {
    * in both paper and live mode.
    */
   rebase: () => Promise<void>;
-  /** Prints the full multi-line dashboard once, on demand ("status" command). */
-  printStatus: () => void;
   onExit: () => void;
 }
 
@@ -132,8 +130,7 @@ export async function handleLine(line: string, deps: CommandDeps): Promise<void>
       await deps.rebase();
       return;
     case "status":
-      deps.printStatus();
-      return;
+      return; // dashboard redraws on its own timer
     case "help":
       console.log(
         "commands: buy [usd] [a|b|c] [@maxPrice]  cancel [a|b|c]  sell [percent] [a|b|c]  panic [a|b|c]  reset  rebase  status  quit\n" +

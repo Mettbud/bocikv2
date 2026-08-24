@@ -299,92 +299,33 @@ export function formatAge(ageMs: number): string {
   return `${Math.floor(safeAgeMs / 3_600_000)}h ago`;
 }
 
-function formatSlotCompact(slot: SlotDashboardState): string {
-  const p = slot.position;
-  if (!p) return `${slot.label}:-`;
-  const pctStr =
-    p.unrealizedPercent !== undefined
-      ? `${p.unrealizedPercent >= 0 ? "+" : ""}${p.unrealizedPercent.toFixed(1)}%`
-      : "-";
-  return `${slot.label}:${Math.round(p.tokenAmount)}@${p.buyPriceUsd.toFixed(6)}(${pctStr})`;
-}
-
-/** The compact line's content, with no ANSI color codes - see renderDashboard(). */
-function formatStatusLine(s: DashboardState): string {
-  const price = s.priceUsd !== undefined ? `$${s.priceUsd.toFixed(6)}` : "-";
-  const slots = [s.slotA, s.slotB, s.slotC]
-    .filter((slot): slot is SlotDashboardState => slot !== undefined)
-    .map(formatSlotCompact)
-    .join("  ");
-  return `${s.tokenSymbol} ${price} | ${slots} | PnL $${s.realizedPnlUsd.toFixed(2)} | ${s.mode}`;
-}
-
-let lastPrintedLine: string | undefined;
-/** How many characters of the current terminal line are ours (for blanking it later). 0 = nothing pending. */
-let ownedLineWidth = 0;
+let lastPrintedBody: string | undefined;
 
 /**
- * Reclaims the sticky status line before something else (a log line)
- * prints, using nothing but a carriage return and plain spaces - no
- * escape codes at all. `\r` and printable ASCII space are interpreted
- * identically by every terminal that has ever existed, unlike ANSI
- * cursor-movement/screen-clear sequences, which - across several
- * rounds of fixes here - turned out not to behave as documented in the
- * terminal this was actually being run in, even though basic color
- * codes rendered fine there. Must run BEFORE the external write, same
- * reasoning as before: if the log prints first, it lands appended to
- * whatever's already on this line instead of starting its own.
- */
-export function prepareForExternalWrite(): void {
-  if (!process.stdout.isTTY || ownedLineWidth === 0) return;
-  process.stdout.write("\r" + " ".repeat(ownedLineWidth) + "\r");
-  ownedLineWidth = 0;
-  lastPrintedLine = undefined; // the line is blank now - the next status render must not skip as "unchanged"
-}
-
-/**
- * Updates a single sticky status line in place - `\r` back to column 0,
- * then overwrite. This is deliberately much less detailed than the old
- * multi-line box (see printFullDashboard for that, on demand via the
- * "status" command): a carriage return can only rewind within the
- * current line, it has no notion of "up" the way a full redraw would
- * need, so a genuinely static *multi-line* panel isn't possible without
- * ANSI cursor movement - which is exactly what turned out to be
- * unreliable here. Trading detail for a mechanism that is guaranteed to
- * never leave stray lines behind, on any terminal.
+ * Prints the dashboard as a normal, scrolling console line - the same
+ * way every BUY/SELL/error log line already prints, which never had a
+ * duplication problem. Earlier versions tried to make this a
+ * self-updating, in-place "live" panel using ANSI cursor movement
+ * (\x1b[<n>A) and screen erase (\x1b[0J/\x1b[2J) codes, refreshed on a
+ * timer. That depends on the terminal executing those codes exactly as
+ * intended; in practice it kept failing in subtly different ways across
+ * terminals (plain cmd.exe scrolling instead of clearing on \x1b[2J,
+ * wrapped long lines desyncing the cursor-up count, and finally cursor
+ * movement just not taking effect at all in one reporter's console,
+ * even though colors rendered fine) - each fix traded one failure mode
+ * for another. A plain scrolling print has no failure mode: it's the
+ * same mechanism the rest of the bot's own output already uses
+ * successfully.
  *
- * Skips repeat frames where nothing actually changed, so a quiet market
- * doesn't even trigger a redundant rewrite.
+ * Repeated identical frames (nothing changed since the last tick) are
+ * skipped so a quiet market doesn't spam the terminal every
+ * DASHBOARD_REFRESH_MS for no reason.
  */
 export function renderDashboard(s: DashboardState): void {
-  const line = formatStatusLine(s);
-  if (line === lastPrintedLine) return;
-  lastPrintedLine = line;
-
-  if (!process.stdout.isTTY) {
-    console.log(line);
-    return;
-  }
-  // Leave one column of margin so the line never touches the exact
-  // terminal width, where some consoles wrap early.
-  const width = Math.max(1, (process.stdout.columns || 80) - 1);
-  const truncated = line.length > width ? line.slice(0, width) : line;
-  process.stdout.write("\r" + truncated.padEnd(ownedLineWidth));
-  ownedLineWidth = truncated.length;
-}
-
-/**
- * Full multi-line detail, printed once on demand (the "status" command)
- * as a normal scrolling block - never on a timer, so it can't pile up.
- */
-export function printFullDashboard(s: DashboardState): void {
-  if (process.stdout.isTTY && ownedLineWidth > 0) {
-    process.stdout.write("\r\n");
-    ownedLineWidth = 0;
-  }
-  console.log(
+  const body =
     formatDashboard(s) +
-      "\n\ncommands: buy [usd] [a|b|c] [@maxPrice]  cancel [a|b|c]  sell [percent] [a|b|c]  panic [a|b|c]  reset  status  quit",
-  );
-  lastPrintedLine = undefined;
+    "\n\ncommands: buy [usd] [a|b|c] [@maxPrice]  cancel [a|b|c]  sell [percent] [a|b|c]  panic [a|b|c]  reset  status  quit";
+  if (body === lastPrintedBody) return;
+  lastPrintedBody = body;
+  console.log(body);
 }
