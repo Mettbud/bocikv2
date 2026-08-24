@@ -299,75 +299,33 @@ export function formatAge(ageMs: number): string {
   return `${Math.floor(safeAgeMs / 3_600_000)}h ago`;
 }
 
-const ANSI_PATTERN = /\x1b\[[0-9;]*m/g;
+let lastPrintedBody: string | undefined;
 
 /**
- * Counts the physical terminal rows `text` will occupy at a given
- * terminal width, not just its `\n` count. A logical line longer than
- * the terminal is wrapped by the terminal itself, so undercounting rows
- * here (e.g. the long commands line at 80 columns) would move the
- * cursor up too little on the next redraw and leave stray leftover
- * characters from the previous frame - which looks exactly like the
- * screen scrolling forever, just slower than a full-screen clear bug.
- */
-function countPhysicalRows(text: string, columns: number): number {
-  return text.split("\n").reduce((total, line) => {
-    const visibleWidth = line.replace(ANSI_PATTERN, "").length;
-    return total + Math.max(1, Math.ceil(visibleWidth / columns));
-  }, 0);
-}
-
-let clearedScrollbackOnce = false;
-let previousRenderRowCount = 0;
-
-/**
- * Reclaims the dashboard's own screen space before something else (a log
- * line) writes to stdout outside of renderDashboard(). Must be called
- * BEFORE that write, not after: if the log gets printed first, its text
- * ends up sitting right where the old dashboard was, so erasing
- * afterwards would either wipe the log itself or land in the wrong
- * place. Erasing first means the log becomes the only new content, and
- * the next renderDashboard() call simply prints a fresh frame below it
- * instead of trying to redraw over unknown territory.
+ * Prints the dashboard as a normal, scrolling console line - the same
+ * way every BUY/SELL/error log line already prints, which never had a
+ * duplication problem. Earlier versions tried to make this a
+ * self-updating, in-place "live" panel using ANSI cursor movement
+ * (\x1b[<n>A) and screen erase (\x1b[0J/\x1b[2J) codes, refreshed on a
+ * timer. That depends on the terminal executing those codes exactly as
+ * intended; in practice it kept failing in subtly different ways across
+ * terminals (plain cmd.exe scrolling instead of clearing on \x1b[2J,
+ * wrapped long lines desyncing the cursor-up count, and finally cursor
+ * movement just not taking effect at all in one reporter's console,
+ * even though colors rendered fine) - each fix traded one failure mode
+ * for another. A plain scrolling print has no failure mode: it's the
+ * same mechanism the rest of the bot's own output already uses
+ * successfully.
  *
- * Skipping this (i.e. letting a log print past a live dashboard
- * uncleared) is what caused the dashboard to visibly grow forever: every
- * log line left a whole stale copy of the dashboard behind it, on top of
- * the fresh one the next render added.
+ * Repeated identical frames (nothing changed since the last tick) are
+ * skipped so a quiet market doesn't spam the terminal every
+ * DASHBOARD_REFRESH_MS for no reason.
  */
-export function prepareForExternalWrite(): void {
-  if (previousRenderRowCount > 0) {
-    process.stdout.write(`\x1b[${previousRenderRowCount}A\x1b[0J`);
-    previousRenderRowCount = 0;
-  }
-}
-
 export function renderDashboard(s: DashboardState): void {
   const body =
     formatDashboard(s) +
     "\n\ncommands: buy [usd] [a|b|c] [@maxPrice]  cancel [a|b|c]  sell [percent] [a|b|c]  panic [a|b|c]  reset  status  quit";
-  // 80 matches conhost's traditional default width and is a safe
-  // (slight over-count, never under-count for anything narrower) guess
-  // when the terminal doesn't report its size at all.
-  const columns = process.stdout.columns || 80;
-
-  if (!clearedScrollbackOnce) {
-    // \x1b[3J wipes scrollback too - run only ONCE, on the very first
-    // render, to clear stale content from before this run started.
-    process.stdout.write("\x1b[2J\x1b[3J\x1b[H");
-    clearedScrollbackOnce = true;
-  } else if (previousRenderRowCount > 0) {
-    // Redraw in place: move the cursor back up over the previous render,
-    // then erase from there to the end of the screen. This is preferred
-    // over a fresh \x1b[2J\x1b[H every refresh because plain Windows
-    // console windows (conhost outside Windows Terminal - e.g. a classic
-    // cmd.exe window) don't clear \x1b[2J in place; they scroll the whole
-    // viewport into scrollback and blank it, so every refresh pushed a
-    // full screen of blank lines into the buffer and the dashboard
-    // appeared to scroll forever. Moving up + erasing-to-end overwrites
-    // the previous render's lines directly and works the same everywhere.
-    process.stdout.write(`\x1b[${previousRenderRowCount}A\x1b[0J`);
-  }
+  if (body === lastPrintedBody) return;
+  lastPrintedBody = body;
   console.log(body);
-  previousRenderRowCount = countPhysicalRows(body, columns);
 }
