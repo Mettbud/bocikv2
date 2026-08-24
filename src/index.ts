@@ -20,6 +20,7 @@ import {
   isTrailingStopTriggered,
   isWithinBreakoutBuyBand,
   isWithinTrailingStopBand,
+  shouldRequireManualNextBuy,
   sellTargetPrice,
   updateBreakoutPeak,
   updatePeakPrice,
@@ -95,6 +96,14 @@ async function main() {
     config.paper.startingBalanceUsd / initialSolUsd,
     defaultInitialPortfolioUsd,
   );
+  // B/C are automatic reinforcement slots. Older versions could persist a
+  // manual-exit lock for them; clear it on startup. Slot A deliberately
+  // keeps that lock until its next manual buy.
+  s = {
+    ...s,
+    slotB: { ...s.slotB, requireManualNextBuy: false },
+    slotC: { ...s.slotC, requireManualNextBuy: false },
+  };
 
   // Jupiter has no historical endpoint - live price history starts empty
   // on every restart, so without this every adaptive calculation (sell
@@ -1208,7 +1217,7 @@ async function main() {
     const fillPriceUsd = proceedsUsd / tokenAmount;
     const closingPosition = percentOfPosition >= 100;
     if (closingPosition) {
-      setFlip(slotKey, afterSell(flip, fillPriceUsd, tag === "MANUAL" || tag === "PANIC"));
+      setFlip(slotKey, afterSell(flip, fillPriceUsd, shouldRequireManualNextBuy(slotKey, tag)));
       trailingStopPendingSinceMs[slotKey] = null;
       peakUpdatedAtMs[slotKey] = null;
     } else {

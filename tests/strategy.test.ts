@@ -14,11 +14,19 @@ import {
   isWithinTrailingStopBand,
   rebuyTriggerPrice,
   sellTargetPrice,
+  shouldRequireManualNextBuy,
   updateBreakoutPeak,
   updatePeakPrice,
 } from "../src/strategy.js";
 
 describe("flip strategy state machine", () => {
+  it("keeps only Slot A manual after a user-forced exit", () => {
+    expect(shouldRequireManualNextBuy("A", "MANUAL")).toBe(true);
+    expect(shouldRequireManualNextBuy("A", "PANIC")).toBe(true);
+    expect(shouldRequireManualNextBuy("A", "TRAILING_STOP")).toBe(false);
+    expect(shouldRequireManualNextBuy("B", "MANUAL")).toBe(false);
+    expect(shouldRequireManualNextBuy("C", "PANIC")).toBe(false);
+  });
   it("buys immediately on the very first tick (no prior sell)", () => {
     const state = initialFlipState();
     expect(isBuySignal(state, 1.0, 0)).toBe(true);

@@ -55,15 +55,20 @@ export interface FlipState {
   breakoutPeakUsd: number | null;
   completedFlips: number;
   /**
-   * Set true whenever a MANUAL sell/panic closes this slot's position -
-   * "I wanted OUT" shouldn't be immediately followed by the bot buying
-   * back in on its own the very next tick. Blocks every automatic buy path
-   * (rebuy, reinforcement, breakout) until a manual "buy" opens the next
-   * position, which clears it (see afterBuy). An automatic sell (target/
-   * stop-loss/trailing stop/stagnation) never sets this - that's the
-   * strategy working as intended, not you overriding it.
+   * For Slot A, a MANUAL sell/panic means "I wanted OUT", so automatic buy
+   * paths stay blocked until a manual "buy" opens the next position. The
+   * caller never sets this for reinforcement Slots B/C: they return to
+   * their automatic drawdown signals after any exit.
    */
   requireManualNextBuy: boolean;
+}
+
+/** Only the primary Slot A stays manual after a user-forced full exit. */
+export function shouldRequireManualNextBuy(
+  slotKey: "A" | "B" | "C",
+  sellTag: "AUTO" | "MANUAL" | "PANIC" | "STOP_LOSS" | "TRAILING_STOP" | "STAGNATION",
+): boolean {
+  return slotKey === "A" && (sellTag === "MANUAL" || sellTag === "PANIC");
 }
 
 export function initialFlipState(): FlipState {
