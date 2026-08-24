@@ -207,7 +207,7 @@ const envSchema = z.object({
   BREAKOUT_BUY_ENABLED: boolFlag(false),
   BREAKOUT_BUY_MULTIPLIER: numeric(0.5),
   BREAKOUT_BUY_MIN_PERCENT: numeric(2),
-  BREAKOUT_BUY_MAX_PERCENT: numeric(10),
+  BREAKOUT_BUY_MAX_PERCENT: numeric(5),
   BREAKOUT_BUY_CONFIRMATION_MS: numeric(4000),
   // Same tolerance-band idea as TRAILING_STOP_CONFIRMATION_TOLERANCE_PERCENT,
   // applied to the breakout-buy pullback confirmation.

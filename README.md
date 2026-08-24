@@ -424,7 +424,7 @@ zgodności ze starszą konfiguracją.
 Aktualny profil A/B/C używa dwóch niezależnych adaptacyjnych wejść Slotu A:
 
 - zwykły odkup 2–5% poniżej ostatniej sprzedaży (`ADAPTIVE_REBUY_*`),
-- kupno po wybiciu po cofnięciu 2–10% od nowego szczytu (`BREAKOUT_BUY_*`).
+- kupno po wybiciu po cofnięciu 2–5% od nowego szczytu (`BREAKOUT_BUY_*`).
 
 Trailing wszystkich slotów uzbraja się po +2% od wejścia i rozważa sprzedaż
 po cofnięciu 0,5% od późniejszego szczytu. Cofnięcie musi zostać potwierdzone

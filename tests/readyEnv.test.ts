@@ -38,6 +38,8 @@ describe("ready environment profiles", () => {
       expect(config.trade.slotCSizePercent).toBe(30);
       expect(config.trade.minSolReserve).toBe(0.01);
       expect(config.strategy.breakoutBuyEnabled).toBe(true);
+      expect(config.strategy.breakoutBuyMinPercent).toBe(2);
+      expect(config.strategy.breakoutBuyMaxPercent).toBe(5);
       expect(config.strategy.adaptiveRebuyEnabled).toBe(true);
       expect(config.strategy.adaptiveRebuyMinPercent).toBe(2);
       expect(config.strategy.adaptiveRebuyMaxPercent).toBe(5);
