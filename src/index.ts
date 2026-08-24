@@ -259,6 +259,7 @@ async function main() {
             executeSell("C", 100, { requireProfitGate: false, tag: "PANIC" }),
           ]).then(() => undefined),
     reset: resetPaperSession,
+    rebase: rebaseInitialPortfolio,
     onExit: stop,
   });
 
@@ -322,8 +323,13 @@ async function main() {
       pendingManualBuy[slotKey] = null;
       return;
     }
+    // Cheap pre-filter only - currentPriceUsd is a thin reference quote
+    // (PRICE_REFERENCE_SOL_AMOUNT), not what this order would actually pay.
+    // Skips fetching a real quote on every tick while price is nowhere
+    // close, without being the thing that actually decides whether to buy -
+    // see maxPriceUsd passed into executeBuy below for that.
     if (currentPriceUsd > pending.maxPriceUsd) return;
-    await executeBuy(slotKey, pending.usdAmount, { requireCostGate: false, tag: "MANUAL" });
+    await executeBuy(slotKey, pending.usdAmount, { requireCostGate: false, tag: "MANUAL" }, pending.maxPriceUsd);
   }
 
   async function evaluateSlotA(currentPriceUsd: number, solUsd: number): Promise<void> {
@@ -734,6 +740,7 @@ async function main() {
     slotKey: SlotKey,
     usdAmountOverride: number | undefined,
     opts: { requireCostGate: boolean; tag: "AUTO" | "MANUAL" },
+    maxPriceUsd?: number,
   ): Promise<void> {
     const flip = getFlip(slotKey);
     if (flip.phase !== "AWAITING_BUY") {
@@ -746,7 +753,7 @@ async function main() {
     }
     slotLocks[slotKey] = true;
     try {
-      await executeBuyLocked(slotKey, flip, usdAmountOverride, opts);
+      await executeBuyLocked(slotKey, flip, usdAmountOverride, opts, maxPriceUsd);
     } finally {
       slotLocks[slotKey] = false;
     }
@@ -757,6 +764,7 @@ async function main() {
     flip: FlipState,
     usdAmountOverride: number | undefined,
     opts: { requireCostGate: boolean; tag: "AUTO" | "MANUAL" },
+    maxPriceUsd?: number,
   ): Promise<void> {
     const solUsd = await solPrice.getPrice();
     const solBalance = config.mode === "live" && owner ? await getSolBalanceSol(connection, owner) : s.paperSolBalance;
@@ -803,6 +811,24 @@ async function main() {
       log.warn(msg);
       if (opts.tag === "MANUAL") console.log(msg);
       return;
+    }
+
+    // The authoritative check for "buy ... @maxPrice" limit orders: the
+    // pre-filter in checkPendingManualBuy only looks at a thin reference
+    // quote, not what THIS order (its real size) would actually pay - a
+    // bigger order has more price impact than the reference amount, so its
+    // real average fill price can end up above the limit even when the
+    // reference price looked fine. This is what actually decides whether to
+    // buy. Doesn't clear the pending order - it stays queued and retries
+    // next tick, same as if the reference pre-filter hadn't passed yet.
+    if (maxPriceUsd !== undefined) {
+      const projectedFillPriceUsd = solIn * solUsd / (Number(buy.quote.outAmount) / 10 ** tokenDecimals);
+      if (projectedFillPriceUsd > maxPriceUsd) {
+        const msg = `Slot ${slotKey}: limit buy waiting - projected fill $${projectedFillPriceUsd.toFixed(8)} > limit $${maxPriceUsd.toFixed(8)} (this order's own size has more impact than the reference quote)`;
+        if (config.log.logSkips) log.info(msg);
+        if (opts.tag === "MANUAL") console.log(msg);
+        return;
+      }
     }
 
     const hypotheticalSell = await priceLeg(
@@ -1062,6 +1088,42 @@ async function main() {
       netProfitPercent: net,
       txSignature: fill.txSignature,
     });
+  }
+
+  /**
+   * "rebase" - recomputes initialPortfolioUsd (the fixed base every slot's
+   * SIZE_PERCENT is a % of - see sizing.ts) from the wallet's ACTUAL current
+   * value, instead of whatever it was worth the first time the bot ever
+   * ran. Use this after depositing/withdrawing so future buy sizes reflect
+   * the new balance - without it, adding funds updates the balance shown
+   * on the dashboard but SLOT_A/B/C_SIZE_PERCENT keeps computing off the
+   * old, stale base forever (by design, so PnL doesn't silently inflate
+   * trade size - see the comment on initialPortfolioUsd in ledger.ts).
+   * Unlike reset, this never touches open positions, trade history, or
+   * PnL, and works in both paper and live mode.
+   */
+  async function rebaseInitialPortfolio(): Promise<void> {
+    if (latestSolUsd === undefined || latestPriceUsd === undefined) {
+      console.log("rebase: brak jeszcze danych cenowych - poczekaj na pierwszy tick i spróbuj ponownie.");
+      return;
+    }
+    const solBalance = config.mode === "live" && owner ? await getSolBalanceSol(connection, owner) : s.paperSolBalance;
+    const slotKeys: SlotKey[] = ["A", "B", "C"];
+    const investedUsd = slotKeys.reduce((sum, slotKey) => {
+      const flip = getFlip(slotKey);
+      if (flip.phase === "AWAITING_SELL" && flip.tokenAmount !== null && latestPriceUsd !== undefined) {
+        return sum + flip.tokenAmount * latestPriceUsd;
+      }
+      return sum;
+    }, 0);
+    const oldBase = s.initialPortfolioUsd;
+    const newBase = solBalance * latestSolUsd + investedUsd;
+    s.initialPortfolioUsd = newBase;
+    saveState(config, s);
+    const msg = `rebase: baza wielkości pozycji $${oldBase.toFixed(2)} -> $${newBase.toFixed(2)} (${usdSigned(newBase - oldBase)}) - SLOT_A/B/C_SIZE_PERCENT liczą się teraz od tej nowej wartości`;
+    setEvent(msg);
+    console.log(msg);
+    log.info("rebased initialPortfolioUsd", { oldBase: round2(oldBase), newBase: round2(newBase) });
   }
 
   function resetPaperSession(): void {

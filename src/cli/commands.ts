@@ -22,6 +22,14 @@ export interface CommandDeps {
   cancelManualBuy: (slot: SlotKey) => void;
   /** Paper mode only: wipes both slots and balances back to a fresh start. */
   reset: () => void;
+  /**
+   * Recomputes initialPortfolioUsd (the base that SLOT_A/B/C_SIZE_PERCENT
+   * are a fixed % of) from the wallet's ACTUAL current value - use after
+   * depositing/withdrawing so future buy sizes reflect the new balance.
+   * Unlike reset, doesn't touch open positions, history, or PnL, and works
+   * in both paper and live mode.
+   */
+  rebase: () => Promise<void>;
   onExit: () => void;
 }
 
@@ -111,13 +119,17 @@ export async function handleLine(line: string, deps: CommandDeps): Promise<void>
       }
       deps.reset();
       return;
+    case "rebase":
+      await deps.rebase();
+      return;
     case "status":
       return; // dashboard redraws on its own timer
     case "help":
       console.log(
-        "commands: buy [usd] [a|b|c] [@maxPrice]  cancel [a|b|c]  sell [percent] [a|b|c]  panic [a|b|c]  reset  status  quit\n" +
+        "commands: buy [usd] [a|b|c] [@maxPrice]  cancel [a|b|c]  sell [percent] [a|b|c]  panic [a|b|c]  reset  rebase  status  quit\n" +
           '  "buy" or "buy a" alone uses the slot\'s normal fixed size (e.g. 30% of the starting portfolio)\n' +
-          '  "buy a @0.025" waits for the price to drop to $0.025 or below before buying (normal size); "cancel a" cancels it',
+          '  "buy a @0.025" waits for the price to drop to $0.025 or below before buying (normal size); "cancel a" cancels it\n' +
+          '  "rebase" recomputes the 30%-of-starting-balance base from your CURRENT wallet value - use after a deposit/withdrawal',
       );
       return;
     case "quit":

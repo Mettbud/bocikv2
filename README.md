@@ -243,7 +243,11 @@ Bot prowadzi **dwie niezależne pozycje jednocześnie**, każda po
 `SLOT_A_SIZE_PERCENT`/`SLOT_B_SIZE_PERCENT` (domyślnie 30%+30%) - policzone
 **od salda startowego**, nie od aktualnego (patrz sekcja o wielkości
 transakcji wyżej). Przy $1000 na start to $300 do Slotu A i $300 do Slotu
-B, zawsze, niezależnie od tego jak zmienia się saldo w trakcie handlu:
+B, zawsze, niezależnie od tego jak zmienia się saldo w trakcie handlu -
+**także po wpłacie/wypłacie środków na portfel** (świadomie, żeby PnL nie
+"dokompoundowywał się" po cichu w wielkość transakcji). Jeśli chcesz, żeby
+30%/30%/20% liczyło się od nowego, aktualnego salda po wpłacie - użyj
+komendy `rebase` w konsoli (patrz niżej).
 
 - **Slot A** działa dokładnie jak opisano wyżej - samodzielnie kupuje,
   sprzedaje, odkupuje na spadku. Główna, "zwykła" pozycja.
@@ -356,6 +360,9 @@ panic [a|b|c]          - natychmiastowe wyjście z pozycji; bez argumentu wychod
 reset                  - (tylko paper) zeruje saldo i WSZYSTKIE sloty do stanu startowego - od zera, łącznie z
                          lastSellPrice i licznikiem flipów, więc jeśli masz SLOT_A_REQUIRE_MANUAL_FIRST_BUY=true,
                          po resecie znowu czeka na ręczny "buy" zamiast odkupować automatycznie
+rebase                 - przelicza bazę SLOT_A/B/C_SIZE_PERCENT na aktualną, prawdziwą wartość portfela (patrz
+                         niżej) - użyj po wpłacie/wypłacie środków; nie rusza otwartych pozycji ani historii,
+                         działa w obu trybach (paper i live)
 status                - wymusza odświeżenie (dashboard i tak odświeża się sam)
 quit / exit           - zamyka bota, zapisując stan
 ```
